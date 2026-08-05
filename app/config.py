@@ -1,0 +1,37 @@
+"""설정 — 환경변수 하나로만 주입받는다.
+
+이 서버는 업무 DB에 접속하지 않는다. 그래서 DB 설정이 여기 없는 것이 정상이다.
+상태를 갖지 않는 계산 서버로 두면 계층을 특화 모델로 갈아끼우거나 인스턴스를
+늘려도 계약이 깨지지 않는다. 모든 입력은 요청 본문으로 받고 출력은 응답으로 준다.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # Spring EC2 에서만 들어오는 호출임을 확인하는 공유 시크릿.
+    # 보안그룹으로 인바운드를 좁혀도 이건 별도로 둔다 — 같은 VPC 안의 다른
+    # 인스턴스가 뚫렸을 때 방어선이 하나도 없는 상태가 되지 않게.
+    internal_token: str = ""
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+
+    qdrant_url: str = "http://localhost:6333"
+
+    # 계층 호출 실패 정책 (명세 「레이어 호출 실패 정책」)
+    # 일시적 실패는 지수 백오프 3회, 지터 ±20%.
+    retry_delays_sec: tuple[float, ...] = (2.0, 8.0, 30.0)
+    retry_jitter_ratio: float = 0.2
+
+    # 1이면 Gemini 를 부르지 않고 고정 스텁을 돌려준다. 라우팅·스키마 확인용.
+    dry_run: bool = False
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
