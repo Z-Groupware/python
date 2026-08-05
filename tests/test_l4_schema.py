@@ -4,9 +4,12 @@
 없는 근거 발화가 액션 테이블까지 흘러가고, 그건 화면에서 사람이 알아볼 수 없다.
 """
 
-from app.layers.l4 import build_response_schema, parse_tuples
+import pytest
+from pydantic import ValidationError
+
+from app.layers.l4 import build_response_schema, evidence_pool, parse_tuples
 from app.schemas.common import Participant, Utterance
-from app.schemas.l4 import UNKNOWN_PERSON
+from app.schemas.l4 import UNKNOWN_PERSON, TopicItem
 
 PARTICIPANTS = [
     Participant(person_id=7, name="김서준"),
@@ -161,3 +164,68 @@ class TestParseTuples:
         result = parse_tuples({"tuples": [item, dict(item)]}, PARTICIPANTS, UTTERANCES)
 
         assert len(result) == 1
+
+
+class TestEvidencePool:
+    """근거 후보를 항목이 선 근거로 좁힌다 — 확정 항목과 뽑힌 배정의 연결을 유지하기 위함."""
+
+    @staticmethod
+    def _item(evidence_ids):
+        return TopicItem(
+            item_type="DECISION",
+            gate_status="CONFIRMED",
+            content="온보딩 축소",
+            evidence_utterance_ids=evidence_ids,
+        )
+
+    def test_항목이_근거를_들고오면_그것만_후보다(self):
+        pool = evidence_pool([self._item([8812])], UTTERANCES)
+
+        assert [u.utterance_id for u in pool] == [8812]
+
+    def test_항목에_근거가_없으면_발화_전체가_후보다(self):
+        # Spring 이 아직 채우지 않는 단계. 전부 버리면 배정을 하나도 못 뽑는다.
+        pool = evidence_pool([self._item([])], UTTERANCES)
+
+        assert [u.utterance_id for u in pool] == [8812, 8813]
+
+    def test_항목의_근거가_발화목록에_없으면_전체로_되돌린다(self):
+        # 둘이 어긋난 상황. 전부 버리면 조용히 빈 결과가 된다.
+        pool = evidence_pool([self._item([99999])], UTTERANCES)
+
+        assert [u.utterance_id for u in pool] == [8812, 8813]
+
+    def test_좁혀진_후보만_스키마_enum에_들어간다(self):
+        pool = evidence_pool([self._item([8812])], UTTERANCES)
+
+        schema = build_response_schema(PARTICIPANTS, pool)
+        enum = schema["properties"]["tuples"]["items"]["properties"]["evidenceUtteranceId"]["enum"]
+
+        assert enum == ["8812"]
+
+    def test_후보_밖_발화를_근거로_쓰면_항목이_버려진다(self):
+        pool = evidence_pool([self._item([8812])], UTTERANCES)
+        raw = {
+            "tuples": [
+                {
+                    "title": "후보 밖 근거",
+                    "assigneeCandidatePersonId": "7",
+                    "assigneeSource": "EXPLICIT_CALL",
+                    "evidenceUtteranceId": "8813",
+                }
+            ]
+        }
+
+        assert parse_tuples(raw, PARTICIPANTS, pool) == []
+
+
+class TestGateStatus:
+    def test_확정되지_않은_항목은_거절한다(self):
+        # L3.5 를 통과하지 않은 논의가 섞여 들어오면 결정되지도 않은 이야기가
+        # 배정으로 확정된다. 주석이 아니라 스키마로 막는다.
+        with pytest.raises(ValidationError):
+            TopicItem(item_type="DISCUSSION", gate_status="DISCUSSED", content="검토 중")
+
+    def test_gate_status는_생략할_수_없다(self):
+        with pytest.raises(ValidationError):
+            TopicItem(item_type="DECISION", content="온보딩 축소")

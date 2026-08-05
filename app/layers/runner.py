@@ -51,20 +51,38 @@ def load_prompt(prompt_file: str) -> str:
 
 
 def render_prompt(template: str, variables: dict[str, str]) -> str:
-    rendered = template
-    for key, value in variables.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", value)
+    """자리표시자 검사는 **치환 전에 템플릿만** 보고, 치환은 한 번에 끝낸다.
 
-    # 남은 토큰이 있으면 프롬프트와 호출부가 어긋난 것이다. 그대로 보내면
-    # 모델에게 "{{UTTERANCES}}" 라는 문자열을 근거로 답하라고 시키는 셈이 된다.
-    leftover = _PLACEHOLDER.findall(rendered)
-    if leftover:
+    치환된 결과를 검사하면 두 가지가 깨진다.
+      ① 회의 내용에 우연히 `{{...}}` 가 들어 있으면 치환 누락으로 오판해 실패한다
+      ② 먼저 넣은 값 안의 `{{UTTERANCES}}` 가 뒤 순번에서 실제 발화로 치환된다
+         — 회의에서 말한 내용이 프롬프트 구조를 바꾸는 주입 경로가 된다
+    한 번의 정규식 치환으로 바꾸면 넣은 값은 다시 훑지 않으므로 둘 다 사라진다.
+    """
+    required = set(_PLACEHOLDER.findall(template))
+    provided = set(variables)
+
+    # 템플릿에는 있는데 값이 없다 — 그대로 보내면 모델에게 "{{UTTERANCES}}" 라는
+    # 문자열을 근거로 답하라고 시키는 셈이 된다.
+    missing = required - provided
+    if missing:
         raise LayerError(
             LayerErrorKind.PERMANENT,
             "PROMPT_UNRESOLVED",
-            f"치환되지 않은 자리표시자: {sorted(set(leftover))}",
+            f"치환되지 않은 자리표시자: {sorted(missing)}",
         )
-    return rendered
+
+    # 값은 만들었는데 프롬프트가 쓰지 않는다 — 프롬프트를 고치며 자리표시자를 지운
+    # 경우다. 조용히 두면 그 정보가 모델에 안 가는데도 코드만 보면 가는 것처럼 읽힌다.
+    unused = provided - required
+    if unused:
+        raise LayerError(
+            LayerErrorKind.PERMANENT,
+            "PROMPT_UNUSED_VARIABLE",
+            f"프롬프트가 쓰지 않는 변수: {sorted(unused)}",
+        )
+
+    return _PLACEHOLDER.sub(lambda match: variables[match.group(1)], template)
 
 
 class LayerRunner:

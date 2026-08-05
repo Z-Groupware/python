@@ -75,8 +75,10 @@ class GeminiClient:
     def _delay_for(self, attempt: int, error: LayerError) -> float:
         # 429 는 서버가 알려준 대기시간을 존중한다. 우리 백오프를 우선하면
         # 레이트리밋이 안 풀린 상태로 다시 때려 쿼터만 더 태운다.
-        if error.kind is LayerErrorKind.RATE_LIMIT and error.retry_after_sec:
-            return error.retry_after_sec
+        # `is not None` 으로 본다 — Retry-After: 0 은 "바로 다시 보내도 된다"는
+        # 서버의 답인데, 참/거짓으로 보면 0 이 falsy 라 30초를 기다린다.
+        if error.kind is LayerErrorKind.RATE_LIMIT and error.retry_after_sec is not None:
+            return max(0.0, error.retry_after_sec)
 
         base = self._settings.retry_delays_sec[attempt]
         # 지터 — 여러 계층이 동시에 실패하면 재시도가 같은 순간에 겹쳐 다시 실패한다.

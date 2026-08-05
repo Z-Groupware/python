@@ -45,8 +45,29 @@ _VIEW_INSTRUCTION = {
 }
 
 
-def build_response_schema(participants: list[Participant], utterances: list[Utterance]) -> dict:
-    """참석자와 발화 목록을 그대로 enum 으로 박은 응답 스키마.
+def evidence_pool(items: list[TopicItem], utterances: list[Utterance]) -> list[Utterance]:
+    """근거로 지정할 수 있는 발화만 골라낸다.
+
+    항목(items)이 자기 근거 발화 id 를 들고 왔으면 **그 발화들로 좁힌다.** L4 의 일은
+    L3.5 가 확정한 항목을 배정으로 바꾸는 것이므로, 근거도 그 항목이 선 근거여야
+    추적이 이어진다. 좁히지 않으면 주제 안의 아무 발화나 근거로 붙을 수 있고,
+    그러면 "확정된 항목"과 "뽑힌 배정"의 연결이 끊긴다.
+
+    비워 보내면(아직 Spring 이 채우지 않는 단계) 주제의 발화 전체를 후보로 둔다 —
+    좁힐 근거가 없을 때 전부 버리면 배정을 하나도 못 뽑는다.
+    """
+    approved = {uid for item in items for uid in item.evidence_utterance_ids}
+    if not approved:
+        return utterances
+
+    narrowed = [u for u in utterances if u.utterance_id in approved]
+    # 항목이 준 id 가 발화 목록에 하나도 없으면 둘이 어긋난 것이다. 전부 버리면
+    # 조용히 빈 결과가 되므로, 문맥 전체를 후보로 두고 후처리 검증에 맡긴다.
+    return narrowed or utterances
+
+
+def build_response_schema(participants: list[Participant], evidence_utterances: list[Utterance]) -> dict:
+    """참석자와 **근거 가능 발화**를 그대로 enum 으로 박은 응답 스키마.
 
     회의마다 참석자가 다르므로 스키마는 요청 시점에 만들어진다. 고정 스키마로 두면
     personId 를 검증할 방법이 없어져 4원칙의 '닫힌 목록'이 프롬프트 부탁으로 내려앉는다.
@@ -54,7 +75,7 @@ def build_response_schema(participants: list[Participant], utterances: list[Utte
     person_enum = [str(p.person_id) for p in participants if p.person_id is not None]
     person_enum.append(UNKNOWN_PERSON)
 
-    utterance_enum = [str(u.utterance_id) for u in utterances]
+    utterance_enum = [str(u.utterance_id) for u in evidence_utterances]
 
     return {
         "type": "OBJECT",
@@ -100,10 +121,12 @@ async def extract_tuples(request: ExtractTuplesRequest, runner: LayerRunner) -> 
         query_text=request.query_text,
     )
 
-    # 발화가 없으면 근거를 붙일 수 없다 = 반환할 수 있는 항목이 없다.
-    # 모델을 부르지 않고 끝낸다 — enum 이 빈 배열인 스키마는 만들 수도 없고,
-    # 불러도 결과가 전부 버려지므로 토큰만 태운다.
-    if not request.utterances:
+    pool = evidence_pool(request.items, request.utterances)
+
+    # 근거 후보가 없으면 반환할 수 있는 항목이 없다. 모델을 부르지 않고 끝낸다 —
+    # enum 이 빈 배열인 스키마는 만들 수도 없고, 불러도 결과가 전부 버려지므로
+    # 토큰만 태운다.
+    if not pool:
         return ExtractTuplesResponse(
             tuples=[],
             used_few_shot=examples,
@@ -111,13 +134,13 @@ async def extract_tuples(request: ExtractTuplesRequest, runner: LayerRunner) -> 
             prompt_version=SPEC.prompt_version,
         )
 
-    schema = build_response_schema(request.participants, request.utterances)
+    schema = build_response_schema(request.participants, pool)
     variables = build_prompt_variables(request, examples)
 
     raw, usage = await runner.run(SPEC, variables=variables, response_schema=schema)
 
     return ExtractTuplesResponse(
-        tuples=parse_tuples(raw, request.participants, request.utterances),
+        tuples=parse_tuples(raw, request.participants, pool),
         used_few_shot=examples,
         usage=usage,
         model=runner.model_name,
@@ -128,10 +151,14 @@ async def extract_tuples(request: ExtractTuplesRequest, runner: LayerRunner) -> 
 def build_prompt_variables(request: ExtractTuplesRequest, examples: list[FewShotExample]) -> dict[str, str]:
     """프롬프트 자리표시자 → 값. 프롬프트 파일과 이 함수가 어긋나면
     `render_prompt` 가 PROMPT_UNRESOLVED 로 즉시 실패한다(조용히 넘어가지 않는다)."""
+    eligible_ids = {u.utterance_id for u in evidence_pool(request.items, request.utterances)}
     return {
         "TOPIC": request.topic,
+        "MEETING_DATE": _format_meeting_date(request.meeting_date),
         "PARTICIPANTS": _format_participants(request.participants),
-        "UTTERANCES": _format_utterances(request.utterances),
+        # 문맥은 전부 보여주고 근거 가능 여부만 표시한다. 근거 후보만 보여주면
+        # 앞뒤 맥락이 사라져 "그거"·"아까 그건" 같은 지시어를 해석할 수 없다.
+        "UTTERANCES": _format_utterances(request.utterances, eligible_ids),
         "ITEMS": _format_items(request.items),
         "FEW_SHOT": _format_few_shot(examples),
         "VIEW_INSTRUCTION": _VIEW_INSTRUCTION[request.view],
@@ -139,15 +166,18 @@ def build_prompt_variables(request: ExtractTuplesRequest, examples: list[FewShot
 
 
 def parse_tuples(
-    raw: dict, participants: list[Participant], utterances: list[Utterance]
+    raw: dict, participants: list[Participant], evidence_utterances: list[Utterance]
 ) -> list[AssignmentTuple]:
     """스키마를 걸었어도 한 번 더 검증한다.
 
     구조화 출력은 제공자 구현에 의존하고, 그 구현이 흔들리는 순간 조용히 오염된
     담당자·근거가 액션 테이블까지 흘러간다. 여기서 걸러내면 최악이 '항목 누락'이다.
+
+    `evidence_utterances` 는 `evidence_pool()` 이 좁힌 목록이어야 한다 — 스키마에
+    박은 enum 과 같은 집합으로 검증해야 둘이 어긋나지 않는다.
     """
     allowed_person_ids = {p.person_id for p in participants if p.person_id is not None}
-    allowed_utterance_ids = {u.utterance_id for u in utterances}
+    allowed_utterance_ids = {u.utterance_id for u in evidence_utterances}
 
     results: list[AssignmentTuple] = []
     seen: set[tuple[str, int | None, int]] = set()
@@ -226,12 +256,22 @@ def _format_participants(participants: list[Participant]) -> str:
     return "\n".join(lines) or "- (없음)"
 
 
-def _format_utterances(utterances: list[Utterance]) -> str:
+def _format_meeting_date(meeting_date: date | None) -> str:
+    if meeting_date is None:
+        # 프롬프트 규칙 3과 짝이다 — 기준일이 없으면 상대 표현을 계산하지 말라고 명시한다.
+        return "(제공되지 않음 — 상대적 기한 표현은 계산하지 말고 dueDate 를 null 로 둔다)"
+    return meeting_date.isoformat()
+
+
+def _format_utterances(utterances: list[Utterance], eligible_ids: set[int]) -> str:
     lines = []
     for utterance in utterances:
         speaker = "미정" if utterance.speaker_id is None else f"personId={utterance.speaker_id}"
         # 화자 미정을 숨기지 않는다. 1인칭 발화의 화자가 미정이면 담당자도 미정이어야 한다.
-        lines.append(f"- id={utterance.utterance_id} · 화자 {speaker} · {utterance.text}")
+        line = f"- id={utterance.utterance_id} · 화자 {speaker} · {utterance.text}"
+        if utterance.utterance_id in eligible_ids:
+            line += "   ← 근거 지정 가능"
+        lines.append(line)
     return "\n".join(lines) or "- (없음)"
 
 
