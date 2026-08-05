@@ -153,6 +153,48 @@ class TestParseReferences:
         # 해소되지 않았는데 대상 표현이 남아 있으면 뒤 계층이 그걸 답으로 읽는다.
         assert reference.resolved_text is None
 
+    def test_담당자를_찾았으면_대상_표현을_비운다(self):
+        # personId 가 답인데 자유 텍스트가 함께 오면 한 항목이 두 대상을 가리키게 되고,
+        # 둘이 어긋나도 소비자는 알 수 없다(CodeRabbit PR #4 지적).
+        raw = {
+            "references": [
+                {
+                    "utteranceId": "101",
+                    "surface": "제가",
+                    "referenceType": "PERSON",
+                    "resolvedPersonId": "42",
+                    "resolvedText": "김서준",  # personId=42 는 이태연이다 — 어긋난 값
+                    "evidenceUtteranceId": "101",
+                }
+            ]
+        }
+
+        [reference] = parse_references(raw, request(), UTTERANCES)
+
+        assert reference.resolved_person_id == 42
+        assert reference.resolved_text is None
+
+    def test_명단_밖_사람이면_이름을_남긴다(self):
+        # "그분 = 김민섭 팀장(명단 밖)" 에서 그 이름이 유일한 단서다. 비우면 사람이
+        # 검토할 때 아무 정보가 없다. L4 는 personId 로만 담당자를 정하므로 오배정 경로가 아니다.
+        raw = {
+            "references": [
+                {
+                    "utteranceId": "101",
+                    "surface": "그거",
+                    "referenceType": "PERSON",
+                    "resolvedPersonId": UNKNOWN_PERSON,
+                    "resolvedText": "김민섭 팀장",
+                    "evidenceUtteranceId": "100",
+                }
+            ]
+        }
+
+        [reference] = parse_references(raw, request(), UTTERANCES)
+
+        assert reference.resolved_person_id is None
+        assert reference.resolved_text == "김민섭 팀장"
+
     def test_명단_밖_인물은_None이지만_PERSON은_유지한다(self):
         # "사람을 가리키지만 누군지 모른다"는 그 자체로 쓸모 있는 답이다 —
         # L4 가 이걸 담당자로 쓰면 안 된다는 뜻이 된다.

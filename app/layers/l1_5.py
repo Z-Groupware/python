@@ -194,7 +194,7 @@ def parse_references(
                 surface=surface,
                 reference_type=reference_type,
                 resolved_person_id=person_id,
-                resolved_text=_resolved_text(item, reference_type),
+                resolved_text=_resolved_text(item, reference_type, person_id),
                 evidence_utterance_id=evidence_id,
             )
         )
@@ -202,9 +202,23 @@ def parse_references(
     return results
 
 
-def _resolved_text(item: dict, reference_type: str) -> str | None:
-    """`unknown_person` 같은 탈출구 문자열이 대상 표현으로 새는 것을 막는다."""
+def _resolved_text(item: dict, reference_type: str, person_id: int | None) -> str | None:
+    """대상 표현. **한 항목이 서로 다른 두 대상을 가리키지 않게** 정리한다.
+
+    <표> 어떤 경우에 비우나
+      UNRESOLVED            해소가 안 됐는데 대상 표현이 남으면 뒤 계층이 그걸 답으로 읽는다
+      PERSON + personId 있음  personId 가 답이다. 자유 텍스트가 함께 오면 둘 중 무엇이 대상인지
+                            소비자가 판단해야 하고, 어긋나면 조용히 갈린다(CodeRabbit PR #4 지적)
+      `unknown_person` 문자열  탈출구 문자열이 대상 표현으로 새는 것
+
+    <표> 남기는 경우
+      PERSON + personId 없음  명단 밖 사람이다. "그분 = 김민섭 팀장(명단 밖)" 에서 그 이름이
+                            유일한 단서고, 비우면 사람이 검토할 때 아무 정보가 없다.
+                            L4 는 어차피 personId 로만 담당자를 정하므로 오배정 경로가 아니다.
+    """
     text = fmt.clip(fmt.as_text(item.get("resolvedText")), RESOLVED_TEXT_MAX)
     if not text or text == UNKNOWN_PERSON or reference_type == UNRESOLVED:
+        return None
+    if reference_type == "PERSON" and person_id is not None:
         return None
     return text
