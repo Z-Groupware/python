@@ -32,9 +32,9 @@ Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이
 | **AI-02** | `POST /internal/layers/l1-5/resolve-reference` | **구현됨** |
 | **AI-03** | `POST /internal/layers/l2/segment-topics` | **구현됨** |
 | **AI-04** | `POST /internal/layers/l3/summarize-topic` | **구현됨** |
-| AI-05 | `POST /internal/layers/l3-5/gate` | 예정 8/6 |
+| **AI-05** | `POST /internal/layers/l3-5/gate` | **구현됨** |
 | **AI-06** | `POST /internal/layers/l4/extract-tuples` | **구현됨** |
-| AI-07 | `POST /internal/layers/l5/verify` | 예정 8/6 |
+| **AI-07** | `POST /internal/layers/l5/verify` | **구현됨** |
 | AI-08 | `POST /internal/vector/upsert` | 예정 8/9 |
 | AI-09 | `POST /internal/similar` | 예정 8/9 |
 | **AI-10** | `GET /internal/health` | **구현됨** |
@@ -54,8 +54,26 @@ L4(`app/layers/l4.py`)가 나머지 계층의 원본 틀이다. 복제해서 **�
 2. **`build_response_schema()`** — 참석자·발화를 enum 으로 박은 응답 스키마
 3. **후처리** — 파싱된 dict → 계층 DTO
 
-호출·재시도·토큰 집계는 `app/layers/runner.py` 가 공통으로 갖는다. 계층마다 따로 쓰면
-같은 버그를 아홉 번 고치게 된다.
+호출·재시도·토큰 집계는 `app/layers/runner.py` 가, 참석자·발화 포맷과 값 되돌리기는
+`app/layers/formatting.py` 가 공통으로 갖는다. 계층마다 따로 쓰면 같은 버그를 아홉 번
+고치게 되고, 실제로는 아홉 번째를 빠뜨린다.
+
+라우팅을 붙였으면 `internal.py` 의 `IMPLEMENTED` 도 함께 고친다 — 워커가 그 목록을 보고
+호출 여부를 정한다.
+
+### 후처리가 프롬프트보다 강한 자리들
+
+계층마다 "프롬프트가 부탁하던 것"을 코드가 강제로 바꾼 지점이 하나씩 있다. 새 계층을
+만들 때도 같은 것을 찾아볼 것 — 여기가 이 서버에서 정확도가 실제로 만들어지는 곳이다.
+
+| 계층 | 부탁 대신 강제한 것 |
+|---|---|
+| L1.5 | `surface` 가 그 발화 문자열에 실제로 있는지 확인. 없으면 버린다 — 근거 강제를 문자열 수준까지 |
+| L2 | 모델에게 **시작점만** 받고 구간은 코드가 계산. 겹침·구멍이 생길 방법 자체가 없다. 오버랩 3발화도 코드가 붙인다 |
+| L3 | 분류가 깨지면 버리지 않고 `DISCUSSION` 으로 내린다 — 버리면 내용이 사라지고, 내리면 사람이 한 번 더 볼 뿐이다 |
+| L3.5 | **판정이 없는 항목은 `DISCUSSED`.** 누락이 통과가 되지 않는다 — precision 우선의 실체 |
+| L4 | 참석자·근거 발화를 enum 으로 박고 후처리에서 한 번 더 검증 |
+| L5 | 한 관점이 실패하면 `agree=false`. 둘 다 실패하면 **계층 실패로 던진다** — 검증이 안 돈 것을 '갈렸다'로 기록하지 않는다 |
 
 ### 정확도 4원칙은 프롬프트가 아니라 스키마로 걸린다
 
@@ -109,3 +127,7 @@ uv run ruff check .  # 린트
 
 `retryable` 을 응답 본문에 넣는다. Spring 이 메시지 문자열로 재시도를 추측하게 두면
 영구 실패를 세 번 재시도해 토큰만 태운다 — 판정은 실패를 만든 쪽이 한다.
+
+**실패 사유에 제공자 응답 본문을 싣지 않는다.** L5 의 `results[].error` 는 오류 코드까지만
+담는다(`RATE_LIMITED` 등) — 본문에 무엇이 들어 있을지 보증할 수 없고, 그게 우리 API 응답을
+타고 나가면 되돌릴 수 없다. 본문이 필요한 진단은 서버 로그를 본다.

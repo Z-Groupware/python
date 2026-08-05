@@ -10,12 +10,14 @@ from fastapi.responses import JSONResponse
 
 from app.clients.gemini import GeminiClient
 from app.config import Settings, get_settings
-from app.layers import l1_5, l2, l3, l4
+from app.layers import l1_5, l2, l3, l3_5, l4, l5
 from app.layers.runner import LayerRunner
 from app.schemas.l1_5 import ResolveReferenceRequest, ResolveReferenceResponse
 from app.schemas.l2 import SegmentTopicsRequest, SegmentTopicsResponse
 from app.schemas.l3 import SummarizeTopicRequest, SummarizeTopicResponse
+from app.schemas.l3_5 import GateRequest, GateResponse
 from app.schemas.l4 import ExtractTuplesRequest, ExtractTuplesResponse
+from app.schemas.l5 import VerifyRequest, VerifyResponse
 from app.security import require_internal_token
 
 router = APIRouter(
@@ -25,7 +27,7 @@ router = APIRouter(
 
 # AI-10 이 돌려주는 목록. 라우팅과 따로 관리하면 하나를 붙이고 다른 하나를 잊는다 —
 # 그러면 워커가 "구현됐다"를 보고 호출했다가 501 을 받는다.
-IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-06", "AI-10"]
+IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-10"]
 
 
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
@@ -76,6 +78,15 @@ async def summarize_topic(
     return await l3.summarize_topic(request, runner)
 
 
+# AI-05 · L3.5 확정/논의 게이트 — 판정이 없는 항목은 DISCUSSED 로 채운다(precision 우선).
+@router.post("/layers/l3-5/gate", response_model=GateResponse)
+async def gate(
+    request: GateRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> GateResponse:
+    return await l3_5.gate(request, runner)
+
+
 # AI-06 · L4 tuple 추출 — 다른 계층의 원본 틀.
 @router.post("/layers/l4/extract-tuples", response_model=ExtractTuplesResponse)
 async def extract_tuples(
@@ -83,6 +94,15 @@ async def extract_tuples(
     runner: LayerRunner = Depends(get_runner),
 ) -> ExtractTuplesResponse:
     return await l4.extract_tuples(request, runner)
+
+
+# AI-07 · L5 관점 다변화 검증 — 두 관점을 이 안에서 조합한다(Spring 왕복 1회).
+@router.post("/layers/l5/verify", response_model=VerifyResponse)
+async def verify(
+    request: VerifyRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> VerifyResponse:
+    return await l5.verify(request, runner)
 
 
 # ── AI-10 · 헬스체크 — 워커 백오프 판단용 ──────────────────────────────────────
@@ -104,16 +124,6 @@ async def internal_health(settings: Settings = Depends(get_settings)) -> dict:
 @router.post("/vad/cutpoint")
 async def vad_cutpoint() -> JSONResponse:
     return _not_implemented("AI-01", "VAD 절단점 계산", "8/7")
-
-
-@router.post("/layers/l3-5/gate")
-async def gate() -> JSONResponse:
-    return _not_implemented("AI-05", "L3.5 확정/논의 게이트", "8/6")
-
-
-@router.post("/layers/l5/verify")
-async def verify() -> JSONResponse:
-    return _not_implemented("AI-07", "L5 관점 다변화 검증", "8/6")
 
 
 @router.post("/vector/upsert")
