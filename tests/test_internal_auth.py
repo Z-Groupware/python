@@ -55,12 +55,12 @@ def test_인프라_liveness는_무인증(client):
 
 
 def test_미구현_계층은_501로_거절한다(client):
-    response = client.post("/internal/layers/l5/verify", headers={"X-Internal-Token": TOKEN})
+    response = client.post("/internal/vad/cutpoint", headers={"X-Internal-Token": TOKEN})
 
     # 200 + 빈 결과로 두면 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해
     # 미구현이 품질 문제로 위장된다.
     assert response.status_code == 501
-    assert response.json()["api"] == "AI-07"
+    assert response.json()["api"] == "AI-01"
 
 
 def test_health의_구현목록이_실제_라우팅과_일치한다(client):
@@ -75,7 +75,9 @@ def test_health의_구현목록이_실제_라우팅과_일치한다(client):
         "AI-02": "/internal/layers/l1-5/resolve-reference",
         "AI-03": "/internal/layers/l2/segment-topics",
         "AI-04": "/internal/layers/l3/summarize-topic",
+        "AI-05": "/internal/layers/l3-5/gate",
         "AI-06": "/internal/layers/l4/extract-tuples",
+        "AI-07": "/internal/layers/l5/verify",
     }
     for api_id, path in paths.items():
         assert api_id in implemented, f"{api_id} 라우팅은 있는데 health 목록에 없다"
