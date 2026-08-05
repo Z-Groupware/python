@@ -106,3 +106,31 @@ uv run ruff check .  # 린트
 
 `retryable` 을 응답 본문에 넣는다. Spring 이 메시지 문자열로 재시도를 추측하게 두면
 영구 실패를 세 번 재시도해 토큰만 태운다 — 판정은 실패를 만든 쪽이 한다.
+
+---
+
+## 이미지 · 배포
+
+```
+PR       docker build 만 (자격증명 없음) — Dockerfile 이 깨졌는지 확인
+develop  ECR z-ai 로 커밋 SHA 태그 푸시
+main     빌드·푸시 + SSM 으로 AI EC2 배포 (tag:Role=ai · /opt/z-ai-worker/deploy.sh)
+```
+
+| 항목 | 값 |
+|---|---|
+| 레지스트리 | Private ECR **`z-ai`** (ap-northeast-2) |
+| 태그 | **커밋 SHA 만.** `latest` 안 씀 · Immutable(재푸시 불가) |
+| 보관 | Lifecycle 로 최신 20개 |
+| 자격증명 | **GitHub OIDC 만.** 액세스 키·Docker Hub 토큰을 저장하지 않는다 |
+| 리포 변수 | `AWS_DEPLOY_ROLE_ARN` · `AWS_REGION` · `ECR_REPOSITORY` |
+
+> ⚠️ **이 프로젝트는 `pip` + `requirements.txt` 가 아니라 `uv` + `uv.lock` 이다.**
+> `pip install -r requirements.txt` 로 이미지를 만들면 그런 파일이 없어서 실패한다.
+> Dockerfile 은 `uv sync --locked --no-dev` 로 설치하고 `.venv` 를 실행 스테이지로 복사한다.
+
+Immutable 이라 같은 커밋을 재실행하면 푸시가 실패한다. 그래서 워크플로가 **태그 존재를
+먼저 확인하고 건너뛴다** — 재실행이 빨간불이 되면 사람이 빨간불을 무시하기 시작한다.
+
+컨테이너 헬스체크는 무인증 `/health` 를 쓴다. AI-10(`/internal/health`)은 토큰이 필요해서
+헬스체크로 쓸 수 없다 — 토큰을 이미지·컨테이너 설정에 심어야 하기 때문이다.
