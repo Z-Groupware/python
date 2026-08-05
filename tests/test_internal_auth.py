@@ -55,12 +55,32 @@ def test_인프라_liveness는_무인증(client):
 
 
 def test_미구현_계층은_501로_거절한다(client):
-    response = client.post("/internal/layers/l2/segment-topics", headers={"X-Internal-Token": TOKEN})
+    response = client.post("/internal/layers/l5/verify", headers={"X-Internal-Token": TOKEN})
 
     # 200 + 빈 결과로 두면 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해
     # 미구현이 품질 문제로 위장된다.
     assert response.status_code == 501
-    assert response.json()["api"] == "AI-03"
+    assert response.json()["api"] == "AI-07"
+
+
+def test_health의_구현목록이_실제_라우팅과_일치한다(client):
+    """AI-10 이 "구현됐다"고 답한 계층은 실제로 501 을 돌려주면 안 된다.
+
+    워커가 이 목록을 보고 호출 여부를 정한다. 계층 하나를 붙이고 목록을 잊으면
+    워커가 미구현 계층을 부르거나(501 폭풍) 구현된 계층을 건너뛴다.
+    """
+    implemented = client.get("/internal/health", headers={"X-Internal-Token": TOKEN}).json()["implemented"]
+
+    paths = {
+        "AI-02": "/internal/layers/l1-5/resolve-reference",
+        "AI-03": "/internal/layers/l2/segment-topics",
+        "AI-04": "/internal/layers/l3/summarize-topic",
+        "AI-06": "/internal/layers/l4/extract-tuples",
+    }
+    for api_id, path in paths.items():
+        assert api_id in implemented, f"{api_id} 라우팅은 있는데 health 목록에 없다"
+        # 본문이 비어 422 여도 상관없다 — 501 이 아니면 라우팅이 실체에 닿아 있다는 뜻이다.
+        assert client.post(path, headers={"X-Internal-Token": TOKEN}).status_code != 501
 
 
 def test_L4는_발화가_없으면_모델을_부르지_않는다(client):

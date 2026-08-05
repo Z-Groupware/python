@@ -29,15 +29,18 @@ Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이
 | ID | 경로 | 상태 |
 |---|---|---|
 | AI-01 | `POST /internal/vad/cutpoint` | 예정 8/7 |
-| AI-02 | `POST /internal/layers/l1-5/resolve-reference` | 예정 8/6 |
-| AI-03 | `POST /internal/layers/l2/segment-topics` | 예정 8/6 |
-| AI-04 | `POST /internal/layers/l3/summarize-topic` | 예정 8/6 |
+| **AI-02** | `POST /internal/layers/l1-5/resolve-reference` | **구현됨** |
+| **AI-03** | `POST /internal/layers/l2/segment-topics` | **구현됨** |
+| **AI-04** | `POST /internal/layers/l3/summarize-topic` | **구현됨** |
 | AI-05 | `POST /internal/layers/l3-5/gate` | 예정 8/6 |
 | **AI-06** | `POST /internal/layers/l4/extract-tuples` | **구현됨** |
 | AI-07 | `POST /internal/layers/l5/verify` | 예정 8/6 |
 | AI-08 | `POST /internal/vector/upsert` | 예정 8/9 |
 | AI-09 | `POST /internal/similar` | 예정 8/9 |
 | **AI-10** | `GET /internal/health` | **구현됨** |
+
+AI-10 이 돌려주는 `implemented` 목록과 실제 라우팅이 어긋나지 않는지 테스트가 검증한다
+(`test_internal_auth.py`). 계층을 붙이고 목록을 잊으면 워커가 미구현 계층을 부른다.
 
 `GET /health` 는 무인증 — ALB·컨테이너 liveness 용이다. 계층 수용 가능 여부는 AI-10 이 답한다.
 

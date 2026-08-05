@@ -10,15 +10,28 @@ from typing import Literal
 
 from pydantic import Field
 
-from app.schemas.common import CamelModel, FewShotExample, Participant, Usage, Utterance
-
-# 명단 밖 담당자를 가리키는 탈출구. 닫힌 목록에 이게 없으면 모델이 참석자 중
-# 아무나 하나를 억지로 고르고, 그 값은 검증도 안 된다.
-UNKNOWN_PERSON = "unknown_person"
+from app.schemas.common import (
+    UNKNOWN,
+    UNKNOWN_PERSON,
+    CamelModel,
+    FewShotExample,
+    Participant,
+    Usage,
+    Utterance,
+)
 
 # assigneeSource 를 nullable 로 두는 대신 enum 안에 넣는다 — 구조화 출력에서
 # "nullable + enum" 조합은 제공자마다 처리가 갈려서, 값으로 받고 후처리에서 None 으로 바꾼다.
-SOURCE_UNKNOWN = "UNKNOWN"
+SOURCE_UNKNOWN = UNKNOWN
+
+__all__ = [
+    "SOURCE_UNKNOWN",
+    "UNKNOWN_PERSON",  # 재수출 — 기존 임포트 경로(app.schemas.l4)를 깨지 않는다
+    "AssignmentTuple",
+    "ExtractTuplesRequest",
+    "ExtractTuplesResponse",
+    "TopicItem",
+]
 
 
 class TopicItem(CamelModel):

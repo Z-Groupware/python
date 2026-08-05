@@ -2,6 +2,7 @@
 
 이 파일이 나머지 계층의 원본이다. 새 계층을 추가할 때 복제해서 바꾸는 것은
 ① SPEC(프롬프트 파일·버전) ② build_response_schema ③ 후처리 세 곳뿐이다.
+참석자·발화 포맷과 값 되돌리기는 `formatting.py` 가 공통으로 갖는다.
 
 핵심은 정확도 4원칙을 **프롬프트가 아니라 응답 스키마로** 거는 것이다.
 프롬프트의 "목록에서만 고르세요"는 지켜지지 않을 확률이 남지만,
@@ -10,15 +11,12 @@ enum 으로 박으면 목록 밖 값이 나올 방법 자체가 없다.
 
 from __future__ import annotations
 
-import json
-from datetime import date
-
 from app.layers import few_shot
+from app.layers import formatting as fmt
 from app.layers.runner import LayerRunner, LayerSpec
 from app.schemas.common import FewShotExample, Participant, Utterance
 from app.schemas.l4 import (
     SOURCE_UNKNOWN,
-    UNKNOWN_PERSON,
     AssignmentTuple,
     ExtractTuplesRequest,
     ExtractTuplesResponse,
@@ -31,6 +29,8 @@ SPEC = LayerSpec(
     prompt_version="v1",
     dry_run_payload={"tuples": []},
 )
+
+TITLE_MAX = 300
 
 _VIEW_INSTRUCTION = {
     # 기본 관점 — 주제 전체를 보고 뽑는다.
@@ -72,11 +72,6 @@ def build_response_schema(participants: list[Participant], evidence_utterances: 
     회의마다 참석자가 다르므로 스키마는 요청 시점에 만들어진다. 고정 스키마로 두면
     personId 를 검증할 방법이 없어져 4원칙의 '닫힌 목록'이 프롬프트 부탁으로 내려앉는다.
     """
-    person_enum = [str(p.person_id) for p in participants if p.person_id is not None]
-    person_enum.append(UNKNOWN_PERSON)
-
-    utterance_enum = [str(u.utterance_id) for u in evidence_utterances]
-
     return {
         "type": "OBJECT",
         "properties": {
@@ -86,13 +81,19 @@ def build_response_schema(participants: list[Participant], evidence_utterances: 
                     "type": "OBJECT",
                     "properties": {
                         "title": {"type": "STRING"},
-                        "assigneeCandidatePersonId": {"type": "STRING", "enum": person_enum},
+                        "assigneeCandidatePersonId": {
+                            "type": "STRING",
+                            "enum": fmt.person_enum(participants),
+                        },
                         "assigneeSource": {
                             "type": "STRING",
                             "enum": ["EXPLICIT_CALL", "FIRST_PERSON", SOURCE_UNKNOWN],
                         },
                         "dueDate": {"type": "STRING", "nullable": True},
-                        "evidenceUtteranceId": {"type": "STRING", "enum": utterance_enum},
+                        "evidenceUtteranceId": {
+                            "type": "STRING",
+                            "enum": fmt.utterance_enum(evidence_utterances),
+                        },
                     },
                     "required": [
                         "title",
@@ -151,16 +152,14 @@ async def extract_tuples(request: ExtractTuplesRequest, runner: LayerRunner) -> 
 def build_prompt_variables(request: ExtractTuplesRequest, examples: list[FewShotExample]) -> dict[str, str]:
     """프롬프트 자리표시자 → 값. 프롬프트 파일과 이 함수가 어긋나면
     `render_prompt` 가 PROMPT_UNRESOLVED 로 즉시 실패한다(조용히 넘어가지 않는다)."""
-    eligible_ids = {u.utterance_id for u in evidence_pool(request.items, request.utterances)}
+    eligible_ids = fmt.allowed_utterance_ids(evidence_pool(request.items, request.utterances))
     return {
         "TOPIC": request.topic,
-        "MEETING_DATE": _format_meeting_date(request.meeting_date),
-        "PARTICIPANTS": _format_participants(request.participants),
-        # 문맥은 전부 보여주고 근거 가능 여부만 표시한다. 근거 후보만 보여주면
-        # 앞뒤 맥락이 사라져 "그거"·"아까 그건" 같은 지시어를 해석할 수 없다.
-        "UTTERANCES": _format_utterances(request.utterances, eligible_ids),
+        "MEETING_DATE": fmt.format_meeting_date(request.meeting_date),
+        "PARTICIPANTS": fmt.format_participants(request.participants),
+        "UTTERANCES": fmt.format_utterances(request.utterances, eligible_ids),
         "ITEMS": _format_items(request.items),
-        "FEW_SHOT": _format_few_shot(examples),
+        "FEW_SHOT": fmt.format_few_shot(examples),
         "VIEW_INSTRUCTION": _VIEW_INSTRUCTION[request.view],
     }
 
@@ -176,8 +175,8 @@ def parse_tuples(
     `evidence_utterances` 는 `evidence_pool()` 이 좁힌 목록이어야 한다 — 스키마에
     박은 enum 과 같은 집합으로 검증해야 둘이 어긋나지 않는다.
     """
-    allowed_person_ids = {p.person_id for p in participants if p.person_id is not None}
-    allowed_utterance_ids = {u.utterance_id for u in evidence_utterances}
+    allowed_persons = fmt.allowed_person_ids(participants)
+    allowed_utterances = fmt.allowed_utterance_ids(evidence_utterances)
 
     results: list[AssignmentTuple] = []
     seen: set[tuple[str, int | None, int]] = set()
@@ -186,18 +185,16 @@ def parse_tuples(
         if not isinstance(item, dict):
             continue
 
-        title = str(item.get("title") or "").strip()
+        title = fmt.clip(fmt.as_text(item.get("title")), TITLE_MAX)
         if not title:
             continue
 
-        evidence_id = _as_int(item.get("evidenceUtteranceId"))
+        evidence_id = fmt.as_int(item.get("evidenceUtteranceId"))
         # 근거 강제 — 목록에 없는 id 는 그 항목을 버린다(§규칙 2).
-        if evidence_id is None or evidence_id not in allowed_utterance_ids:
+        if evidence_id is None or evidence_id not in allowed_utterances:
             continue
 
-        assignee = _as_int(item.get("assigneeCandidatePersonId"))
-        if assignee is not None and assignee not in allowed_person_ids:
-            assignee = None  # 명단 밖 = unknown_person 과 같게 취급
+        assignee = fmt.resolve_person(item.get("assigneeCandidatePersonId"), allowed_persons)
 
         source = item.get("assigneeSource")
         if source not in ("EXPLICIT_CALL", "FIRST_PERSON"):
@@ -213,7 +210,7 @@ def parse_tuples(
                 title=title,
                 assignee_candidate_person_id=assignee,
                 assignee_source=source,
-                due_date=_as_iso_date(item.get("dueDate")),
+                due_date=fmt.as_iso_date(item.get("dueDate")),
                 evidence_utterance_id=evidence_id,
             )
         )
@@ -221,70 +218,6 @@ def parse_tuples(
     return results
 
 
-def _as_int(value: object) -> int | None:
-    """`unknown_person` 같은 탈출구 문자열은 None 이 된다.
-
-    personId 를 문자열 enum 으로 받는 이유: 구조화 출력의 enum 은 문자열만 지원한다.
-    정수 enum 을 쓸 수 없어 문자열로 받고 여기서 되돌린다.
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_iso_date(value: object) -> str | None:
-    """형식이 어긋나면 None. 기권 우선 — 틀린 기한은 잘못된 마감으로 보드에 꽂힌다."""
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in ("null", "none", "unknown"):
-        return None
-    try:
-        return date.fromisoformat(text).isoformat()
-    except ValueError:
-        return None
-
-
-def _format_participants(participants: list[Participant]) -> str:
-    lines = []
-    for person in participants:
-        pid = UNKNOWN_PERSON if person.person_id is None else str(person.person_id)
-        lines.append(f"- personId={pid} · {person.name}")
-    return "\n".join(lines) or "- (없음)"
-
-
-def _format_meeting_date(meeting_date: date | None) -> str:
-    if meeting_date is None:
-        # 프롬프트 규칙 3과 짝이다 — 기준일이 없으면 상대 표현을 계산하지 말라고 명시한다.
-        return "(제공되지 않음 — 상대적 기한 표현은 계산하지 말고 dueDate 를 null 로 둔다)"
-    return meeting_date.isoformat()
-
-
-def _format_utterances(utterances: list[Utterance], eligible_ids: set[int]) -> str:
-    lines = []
-    for utterance in utterances:
-        speaker = "미정" if utterance.speaker_id is None else f"personId={utterance.speaker_id}"
-        # 화자 미정을 숨기지 않는다. 1인칭 발화의 화자가 미정이면 담당자도 미정이어야 한다.
-        line = f"- id={utterance.utterance_id} · 화자 {speaker} · {utterance.text}"
-        if utterance.utterance_id in eligible_ids:
-            line += "   ← 근거 지정 가능"
-        lines.append(line)
-    return "\n".join(lines) or "- (없음)"
-
-
 def _format_items(items: list[TopicItem]) -> str:
     lines = [f"- [{item.item_type}] {item.content}" for item in items]
-    return "\n".join(lines) or "- (없음)"
-
-
-def _format_few_shot(examples) -> str:
-    if not examples:
-        return "- (없음 — 축적 전이다. 예시 없이 규칙만으로 판단한다)"
-    lines = []
-    for example in examples:
-        payload = json.dumps(example.payload, ensure_ascii=False)
-        lines.append(f'- 발화: "{example.input_text}"\n  확정 결과: {payload}')
-    return "\n".join(lines)
+    return "\n".join(lines) or fmt.NONE_MARK
