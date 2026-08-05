@@ -10,8 +10,11 @@ from fastapi.responses import JSONResponse
 
 from app.clients.gemini import GeminiClient
 from app.config import Settings, get_settings
-from app.layers import l4
+from app.layers import l1_5, l2, l3, l4
 from app.layers.runner import LayerRunner
+from app.schemas.l1_5 import ResolveReferenceRequest, ResolveReferenceResponse
+from app.schemas.l2 import SegmentTopicsRequest, SegmentTopicsResponse
+from app.schemas.l3 import SummarizeTopicRequest, SummarizeTopicResponse
 from app.schemas.l4 import ExtractTuplesRequest, ExtractTuplesResponse
 from app.security import require_internal_token
 
@@ -19,6 +22,10 @@ router = APIRouter(
     prefix="/internal",
     dependencies=[Depends(require_internal_token)],
 )
+
+# AI-10 이 돌려주는 목록. 라우팅과 따로 관리하면 하나를 붙이고 다른 하나를 잊는다 —
+# 그러면 워커가 "구현됐다"를 보고 호출했다가 501 을 받는다.
+IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-06", "AI-10"]
 
 
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
@@ -38,7 +45,38 @@ def _not_implemented(api_id: str, name: str, planned: str) -> JSONResponse:
     )
 
 
-# ── AI-06 · L4 tuple 추출 — 구현됨 (다른 계층의 원본 틀) ────────────────────────
+# ── 계층 (파이프라인 순서대로) ────────────────────────────────────────────────
+# 전부 l4.py 의 틀을 복제한 것이다 — SPEC · 응답 스키마 · 후처리 세 곳만 다르다.
+
+
+# AI-02 · L1.5 지시어 해소 — L4 의 담당자 판정이 여기 의존한다.
+@router.post("/layers/l1-5/resolve-reference", response_model=ResolveReferenceResponse)
+async def resolve_reference(
+    request: ResolveReferenceRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> ResolveReferenceResponse:
+    return await l1_5.resolve_reference(request, runner)
+
+
+# AI-03 · L2 주제 분할 — 오버랩 3발화는 응답 후처리가 붙인다(프롬프트 부탁이 아니다).
+@router.post("/layers/l2/segment-topics", response_model=SegmentTopicsResponse)
+async def segment_topics(
+    request: SegmentTopicsRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> SegmentTopicsResponse:
+    return await l2.segment_topics(request, runner)
+
+
+# AI-04 · L3 주제별 정리 — 주제마다 한 번씩 호출된다(명세 「주제별 N회」).
+@router.post("/layers/l3/summarize-topic", response_model=SummarizeTopicResponse)
+async def summarize_topic(
+    request: SummarizeTopicRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> SummarizeTopicResponse:
+    return await l3.summarize_topic(request, runner)
+
+
+# AI-06 · L4 tuple 추출 — 다른 계층의 원본 틀.
 @router.post("/layers/l4/extract-tuples", response_model=ExtractTuplesResponse)
 async def extract_tuples(
     request: ExtractTuplesRequest,
@@ -58,7 +96,7 @@ async def internal_health(settings: Settings = Depends(get_settings)) -> dict:
         "model": settings.gemini_model,
         "geminiConfigured": bool(settings.gemini_api_key),
         "dryRun": settings.dry_run,
-        "implemented": ["AI-06", "AI-10"],
+        "implemented": IMPLEMENTED,
     }
 
 
@@ -66,21 +104,6 @@ async def internal_health(settings: Settings = Depends(get_settings)) -> dict:
 @router.post("/vad/cutpoint")
 async def vad_cutpoint() -> JSONResponse:
     return _not_implemented("AI-01", "VAD 절단점 계산", "8/7")
-
-
-@router.post("/layers/l1-5/resolve-reference")
-async def resolve_reference() -> JSONResponse:
-    return _not_implemented("AI-02", "L1.5 지시어 해소", "8/6")
-
-
-@router.post("/layers/l2/segment-topics")
-async def segment_topics() -> JSONResponse:
-    return _not_implemented("AI-03", "L2 주제 분할", "8/6")
-
-
-@router.post("/layers/l3/summarize-topic")
-async def summarize_topic() -> JSONResponse:
-    return _not_implemented("AI-04", "L3 주제별 정리", "8/6")
 
 
 @router.post("/layers/l3-5/gate")

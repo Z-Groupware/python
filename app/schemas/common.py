@@ -7,6 +7,15 @@ API 표면은 camelCase 다(명세 기준). 파이썬 쪽은 snake_case 로 쓰�
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+# 명단 밖 대상을 가리키는 탈출구. 닫힌 목록에 이게 없으면 모델이 참석자 중 아무나
+# 하나를 억지로 고르고, 그 값은 검증도 안 된다. 계층이 공유하므로 여기 둔다 —
+# 계층마다 따로 두면 한쪽만 고쳐졌을 때 enum 과 후처리가 어긋난다.
+UNKNOWN_PERSON = "unknown_person"
+
+# 판정 불가를 나타내는 enum 값. nullable + enum 조합은 구조화 출력에서 제공자마다
+# 처리가 갈리므로, 값으로 받고 후처리에서 None 으로 바꾼다.
+UNKNOWN = "UNKNOWN"
+
 
 class CamelModel(BaseModel):
     model_config = ConfigDict(
