@@ -1,0 +1,56 @@
+name: AI CI
+
+# 계층 서버(FastAPI)의 검사 게이트. BACKEND 의 Gate 1(semgrep @Query)·Gate 2(LLM Judge)는
+# Java 전용이라 그대로 옮겨오지 못한다 — 여기서는 lint · format · test 세 개가 전부다.
+#
+# 버전은 전부 고정한다. `latest` 는 조용히 바뀌어 게이트 동작이 어느 날 달라진다(재현성).
+# uv 버전은 로컬에서 검증한 것과 같은 값으로 둔다.
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint · Format · Test (uv)
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false # PR 코드를 실행하는 잡 — 러너에 git 자격증명을 남기지 않는다
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v9
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      # --locked: uv.lock 이 pyproject 와 어긋나면 실패한다.
+      # 없으면 CI 가 로컬과 다른 의존성 조합으로 통과할 수 있고, 그 통과는 아무것도 보장하지 않는다.
+      # 파이썬 버전은 .python-version(3.12)을 uv 가 읽어 직접 설치한다.
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      # 포맷을 게이트로 두는 이유: 나중에 붙이면 PR 마다 포맷 diff 가 코드 변경에 섞여
+      # 리뷰어가 무엇이 바뀐 건지 못 가려낸다.
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pytest
+        run: uv run pytest -q

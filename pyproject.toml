@@ -1,0 +1,38 @@
+[project]
+name = "module06-ai"
+version = "0.1.0"
+description = "잇다(Z) 회의 분석 — AI EC2 계층 서버 (VAD · Gemini 계층 · Qdrant)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "google-genai>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.7",
+    # fastapi.testclient 의 HTTP 백엔드. starlette 최신은 httpx2 를 요구한다
+    # (httpx 1.x 를 쓰면 StarletteDeprecationWarning).
+    "httpx2>=2.0",
+]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 는 의존성을 인자 기본값으로 선언하는 것이 관용구다(B008 이 잡는 패턴).
+# 함수 안으로 옮기면 FastAPI 가 의존성을 인식하지 못해 주입 자체가 깨진다.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Header",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
