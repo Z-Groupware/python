@@ -12,6 +12,7 @@ from app.layers.l5 import (
     NOT_REPRODUCED,
     _evidence_window,
     _match,
+    blocking,
     build_response_schema,
     compare,
     verify,
@@ -122,6 +123,39 @@ class TestCompare:
 
         assert compare(BASELINE, narrow) == ["title", "dueDate"]
 
+    def test_제목이_갈린_것도_그대로_보고한다(self):
+        # 검토로 보내지 않을 뿐 값을 버리지는 않는다 — 제목이 자주 갈리는지는
+        # 프롬프트를 조일 근거이고, 신호까지 없애면 볼 방법이 없다.
+        narrow = ViewResult(
+            view="EXTRACT_NARROW",
+            tuple=BASELINE.model_copy(update={"title": "A/B 테스트 도구 비교 정리 및 공유"}),
+        )
+
+        assert compare(BASELINE, narrow) == ["title"]
+
+
+class TestBlocking:
+    """갈린 것 중 **사람을 부를 것**만 남기는가."""
+
+    def test_제목만_갈린_것은_검토_사유가_아니다(self):
+        # 좁은 시야에서 같은 일을 조금 다르게 부르는 것은 흔하다. 그걸 검토로 보내면
+        # 목록이 부풀어 진짜 오배정이 표현 차이들 사이에 묻힌다.
+        assert blocking(["title"]) == []
+
+    def test_담당자와_기한은_검토_사유다(self):
+        # 사람이 고칠 것은 이 둘이다. 틀린 담당자는 남의 일을 받게 하고,
+        # 틀린 마감은 그대로 보드에 꽂힌다.
+        assert blocking(["assigneeCandidatePersonId"]) == ["assigneeCandidatePersonId"]
+        assert blocking(["dueDate"]) == ["dueDate"]
+
+    def test_재현_실패는_필드가_아니어도_막는다(self):
+        # 좁은 시야에서 아예 안 나온 것은 필드 하나가 다른 것과 성질이 다르다 —
+        # 넓은 문맥에서만 성립하는 배정이 담당자 오배정의 주된 경로다.
+        assert blocking([NOT_REPRODUCED]) == [NOT_REPRODUCED]
+
+    def test_제목과_담당자가_함께_갈리면_막는다(self):
+        assert blocking(["title", "assigneeCandidatePersonId"]) == ["assigneeCandidatePersonId"]
+
 
 class TestEvidenceWindow:
     def test_근거_발화_앞뒤_3발화만_넘긴다(self):
@@ -162,6 +196,30 @@ class TestVerify:
 
         assert response.agree is True
         assert response.disagreement_fields == []
+
+    async def test_제목만_갈리면_검토로_보내지_않는다(self, patch_narrow):
+        # 실호출에서 바로 나온 모양이다 — "제품 로드맵 초안 작성" vs
+        # "…작성 및 공유". 담당자·기한·근거가 전부 같고 VERIFY 도 ACCEPT 였는데
+        # 표현 차이 하나로 검토 대상이 됐다(python#11).
+        patch_narrow(tuples=[BASELINE.model_copy(update={"title": "A/B 테스트 도구 비교 정리 및 공유"})])
+
+        response = await verify(request(), FakeRunner())
+
+        assert response.agree is True
+        # 값은 버리지 않는다. agree=true 인 채로 갈린 필드가 실려 나간다.
+        assert response.disagreement_fields == ["title"]
+
+    async def test_제목이_갈려도_담당자가_갈리면_검토로_보낸다(self, patch_narrow):
+        patch_narrow(
+            tuples=[
+                BASELINE.model_copy(update={"title": "다른 제목", "assignee_candidate_person_id": 42})
+            ]
+        )
+
+        response = await verify(request(), FakeRunner())
+
+        assert response.agree is False
+        assert response.disagreement_fields == ["title", "assigneeCandidatePersonId"]
 
     async def test_불일치는_다수결로_덮지_않는다(self, patch_narrow):
         patch_narrow(tuples=[BASELINE.model_copy(update={"assignee_candidate_person_id": 42})])
