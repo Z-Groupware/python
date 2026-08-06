@@ -14,6 +14,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    # 계층 함수가 전부 async 다. TestClient 로 감싸면 라우팅까지 함께 도느라
+    # 후처리 하나를 검증하는 데 요청 본문 전체가 필요해진다 — 계층 함수를 직접 부른다.
+    "pytest-asyncio>=0.24",
     "ruff>=0.7",
     # fastapi.testclient 의 HTTP 백엔드. starlette 최신은 httpx2 를 요구한다
     # (httpx 1.x 를 쓰면 StarletteDeprecationWarning).
@@ -36,3 +39,7 @@ extend-immutable-calls = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 마커를 빠뜨린 async 테스트는 "통과"가 아니라 **조용히 건너뛴 것**이 된다.
+# strict 모드면 그런 테스트가 실패로 드러난다 — 안 도는 테스트가 초록불로 보이는 것은
+# 게이트가 생략을 통과로 처리하는 것과 같은 종류의 실패다.
+asyncio_mode = "strict"

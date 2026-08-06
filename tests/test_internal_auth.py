@@ -55,12 +55,12 @@ def test_인프라_liveness는_무인증(client):
 
 
 def test_미구현_계층은_501로_거절한다(client):
-    response = client.post("/internal/layers/l5/verify", headers={"X-Internal-Token": TOKEN})
+    response = client.post("/internal/vad/cutpoint", headers={"X-Internal-Token": TOKEN})
 
     # 200 + 빈 결과로 두면 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해
     # 미구현이 품질 문제로 위장된다.
     assert response.status_code == 501
-    assert response.json()["api"] == "AI-07"
+    assert response.json()["api"] == "AI-01"
 
 
 PARTICIPANTS = [{"personId": 7, "name": "김서준"}]
@@ -89,6 +89,24 @@ IMPLEMENTED_CALLS = {
             "participants": PARTICIPANTS,
         },
     ),
+    "AI-05": (
+        "/internal/layers/l3-5/gate",
+        {
+            "tenantId": 7,
+            "meetingId": 500,
+            "topic": "제품 로드맵",
+            "items": [
+                {
+                    "itemKey": "1",
+                    "itemType": "DECISION",
+                    "content": "A/B 테스트 도구 비교",
+                    "evidenceUtteranceId": 8812,
+                }
+            ],
+            "utterances": UTTERANCES,
+            "participants": PARTICIPANTS,
+        },
+    ),
     "AI-06": (
         "/internal/layers/l4/extract-tuples",
         {
@@ -96,6 +114,22 @@ IMPLEMENTED_CALLS = {
             "meetingId": 500,
             "topic": "제품 로드맵",
             "items": [],
+            "utterances": UTTERANCES,
+            "participants": PARTICIPANTS,
+        },
+    ),
+    "AI-07": (
+        "/internal/layers/l5/verify",
+        {
+            "tenantId": 7,
+            "meetingId": 500,
+            "topic": "제품 로드맵",
+            "tuple": {
+                "title": "A/B 테스트 도구 비교 정리",
+                "assigneeCandidatePersonId": 7,
+                "assigneeSource": "FIRST_PERSON",
+                "evidenceUtteranceId": 8812,
+            },
             "utterances": UTTERANCES,
             "participants": PARTICIPANTS,
         },
