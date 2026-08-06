@@ -25,6 +25,25 @@ REASON_MAX = 500
 # 두 관점이 비교하는 필드. dueDate 를 넣는 이유는 틀린 마감이 그대로 보드에 꽂히기 때문이다.
 COMPARED_FIELDS = ("title", "assigneeCandidatePersonId", "dueDate")
 
+# 그중 **검토로 보낼지를 정하는** 필드. title 이 빠져 있다.
+#
+# 왜 title 이 빠지나 — 좁은 시야에서 같은 일을 조금 다르게 부르는 것은 흔하다.
+# 실호출에서 바로 나온 예: "제품 로드맵 초안 작성" vs "제품 로드맵 초안 작성 및 공유"
+# (담당자·기한·근거 발화가 전부 같았고 VERIFY 관점도 ACCEPT 였다).
+# 그런 것을 검토로 보내면 목록이 부풀어 **진짜 오배정이 표현 차이들 사이에 묻힌다.**
+# 앙상블의 가치는 불확실성 탐지인데, 탐지된 것이 전부 노이즈면 신호가 사라진다.
+#
+# 이 판단은 _match 가 title 로 짝을 맞추지 않는 이유와 같다 — 그쪽에서 피한 문제가
+# 필드 비교에서 그대로 돌아오고 있었다(BACKEND 실호출 검증에서 발견 · python#11).
+#
+# **title 을 버리는 것이 아니다.** disagreementFields 에는 그대로 실린다 —
+# 제목이 자주 갈리는지는 프롬프트를 조일 근거이고, 그 신호까지 없애면 볼 방법이 없다.
+# 다만 사람을 부르지는 않는다. 사람이 고칠 것은 담당자와 기한이지 제목 표현이 아니다.
+#
+# tuple 의 정체성은 (근거 발화 · 담당자 · 기한)이다. 같은 근거 발화에서 정말로 다른 일이
+# 나온 경우는 대개 근거가 갈리거나 재현 자체가 안 돼 notReproduced 로 잡힌다.
+BLOCKING_FIELDS = ("assigneeCandidatePersonId", "dueDate")
+
 
 class VerifyRequest(CamelModel):
     """검증 대상 tuple 하나 + 그것을 다시 뽑는 데 필요한 문맥.
@@ -71,9 +90,14 @@ class ViewResult(CamelModel):
 
 
 class VerifyResponse(CamelModel):
+    # 검토로 보내지 않아도 되는가. **"맞다"가 아니라 "확신할 수 있다"** 이다.
+    #
+    # ⚠ disagreementFields 가 비어 있다는 뜻은 아니다. title 만 갈린 경우 agree=true 인 채로
+    #   그 필드가 실려 나간다(BLOCKING_FIELDS 주석). 표현 차이는 기록할 값이지 사람을 부를
+    #   이유가 아니다.
     agree: bool
 
-    # 두 관점이 갈린 필드. agree=true 면 비어 있다.
+    # 두 관점이 갈린 필드 **전부**. 검토 여부를 정하는 것은 이 중 BLOCKING_FIELDS 뿐이다.
     disagreement_fields: list[str] = Field(default_factory=list)
 
     results: list[ViewResult] = Field(default_factory=list)

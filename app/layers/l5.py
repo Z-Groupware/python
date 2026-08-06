@@ -11,6 +11,10 @@ Python 두 곳에 생겨 한쪽만 고쳐지는 상태가 만들어진다.
 
 두 호출은 병렬로 돈다. 순차로 돌리면 사용자가 기다리는 시간이 그대로 두 배가 되는데,
 두 관점은 서로의 결과를 보지 않으므로(그게 관점 다변화의 전제다) 순서가 의미 없다.
+
+**모든 불일치가 사람을 부를 이유는 아니다.** 검토 여부는 `BLOCKING_FIELDS`(담당자·기한)와
+재현 실패로만 정하고, `title` 표현 차이는 기록만 한다 — 그것까지 검토로 보내면 목록이
+부풀어 진짜 오배정이 표현 차이들 사이에 묻힌다(python#11).
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from app.layers.runner import LayerRunner, LayerSpec
 from app.schemas.common import Participant, Usage, Utterance
 from app.schemas.l4 import AssignmentTuple, ExtractTuplesRequest
 from app.schemas.l5 import (
+    BLOCKING_FIELDS,
     COMPARED_FIELDS,
     REASON_MAX,
     VerifyRequest,
@@ -76,7 +81,10 @@ async def verify(request: VerifyRequest, runner: LayerRunner) -> VerifyResponse:
     disagreements = compare(request.tuple, narrow)
     # 한 관점만 실패해도 안전한 쪽으로 — agree=false 로 검토에 보낸다(명세).
     # 실패한 관점을 "동의"로 세면 검증이 반쪽만 돌았는데 자동 확정으로 나간다.
-    agree = not disagreements and not narrow.error and verify_result.verdict == "ACCEPT"
+    #
+    # 검토 여부는 **갈린 필드 전부가 아니라 BLOCKING_FIELDS 로만** 정한다. title 표현 차이로
+    # 사람을 부르면 검토 목록이 부풀어 진짜 오배정이 그 사이에 묻힌다(BLOCKING_FIELDS 주석).
+    agree = not blocking(disagreements) and not narrow.error and verify_result.verdict == "ACCEPT"
 
     return VerifyResponse(
         agree=agree,
@@ -114,6 +122,18 @@ def compare(baseline: AssignmentTuple, narrow: ViewResult) -> list[str]:
     # COMPARED_FIELDS 는 명세가 돌려주기로 한 필드명 목록이다. 위 비교와 어긋나면
     # 응답에 없는 필드명이 나가므로 순서를 그것에 맞춘다.
     return [field for field in COMPARED_FIELDS if field in differences]
+
+
+def blocking(disagreements: list[str]) -> list[str]:
+    """갈린 필드 중 **검토로 보내야 하는** 것만 남긴다.
+
+    `notReproduced` 는 목록에 없어도 막는다 — 좁은 시야에서 아예 안 나온 것은 필드 하나가
+    다른 것과 성질이 다르고, 넓은 문맥에서만 성립하는 배정이 담당자 오배정의 주된 경로다.
+
+    title 만 갈린 경우 이 함수가 빈 목록을 주고, 그래서 agree 는 true 가 된다. 그때도
+    disagreementFields 에는 title 이 남아 있다 — 값을 버리지 않는다.
+    """
+    return [field for field in disagreements if field in BLOCKING_FIELDS or field == NOT_REPRODUCED]
 
 
 async def _run_narrow(request: VerifyRequest, runner: LayerRunner) -> ViewResult:
