@@ -211,9 +211,7 @@ class TestVerify:
 
     async def test_제목이_갈려도_담당자가_갈리면_검토로_보낸다(self, patch_narrow):
         patch_narrow(
-            tuples=[
-                BASELINE.model_copy(update={"title": "다른 제목", "assignee_candidate_person_id": 42})
-            ]
+            tuples=[BASELINE.model_copy(update={"title": "다른 제목", "assignee_candidate_person_id": 42})]
         )
 
         response = await verify(request(), FakeRunner())
