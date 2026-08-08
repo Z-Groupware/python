@@ -35,14 +35,32 @@ Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이
 | **AI-05** | `POST /internal/layers/l3-5/gate` | **구현됨** |
 | **AI-06** | `POST /internal/layers/l4/extract-tuples` | **구현됨** |
 | **AI-07** | `POST /internal/layers/l5/verify` | **구현됨** |
-| AI-08 | `POST /internal/vector/upsert` | 예정 8/9 |
-| AI-09 | `POST /internal/similar` | 예정 8/9 |
+| **AI-08** | `POST /internal/vector/upsert` | **구현됨** |
+| **AI-09** | `POST /internal/similar` | **구현됨** |
 | **AI-10** | `GET /internal/health` | **구현됨** |
 
 AI-10 이 돌려주는 `implemented` 목록과 실제 라우팅이 어긋나지 않는지 테스트가 검증한다
 (`test_internal_auth.py`). 계층을 붙이고 목록을 잊으면 워커가 미구현 계층을 부른다.
 
 `GET /health` 는 무인증 — ALB·컨테이너 liveness 용이다. 계층 수용 가능 여부는 AI-10 이 답한다.
+
+### few-shot (AI-08 · AI-09)
+
+계층은 `/internal/similar` 를 거치지 않고 `few_shot.lookup` 을 **프로세스 안에서** 부른다.
+같은 인스턴스에 있는 벡터를 네트워크로 왕복시킬 이유가 없다. 그 엔드포인트는 같은 조회를
+밖에서 떼어 볼 수 있게 열어 둔 것이다 — few-shot 이 이상할 때 계층 전체를 돌리지 않고
+검색만 확인할 수 있어야 한다.
+
+    저장  근거 발화 → 벡터(key) + payload = 확정 tuple      AI-08
+    검색  새 발화   → 벡터(query) → 가장 가까운 key → payload 를 few-shot 으로   AI-09
+
+⚠ 임베딩 대상은 **근거 발화 원문**이지 확정 tuple 이 아니다. 검색 시점에 손에 있는 것은
+tuple 이 아니라 새 발화이므로, tuple 을 임베딩하면 쿼리와 키가 다른 공간에 놓여 유사도가
+망가진다(V5.10 주석).
+
+⚠ 조회 실패는 계층을 세우지 않는다. few-shot 은 정확도를 올리는 재료이지 계층의 입력이
+아니라서, Qdrant 가 내려갔다고 여섯 계층이 전부 실패하면 파이프라인이 인덱스 하나에 인질로
+잡힌다. 대신 로그로 크게 남긴다 — 빈 예시 목록은 "없다"와 "실패했다" 둘 다로 읽힌다.
 
 ---
 

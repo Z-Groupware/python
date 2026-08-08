@@ -21,7 +21,23 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash"
 
+    # 임베딩 모델(AI-08·09). 생성 모델과 **따로 둔다** — 계층 모델을 특화 모델로 갈아끼울 때
+    # 임베딩까지 함께 바뀌면 기존 컬렉션 전체를 못 쓰게 된다. 두 축은 독립적으로 움직인다.
+    gemini_embed_model: str = "gemini-embedding-001"
+
+    # 벡터 차원. **컬렉션을 만들 때 박히는 값이다** — 모델 기본값에 맡기면 모델을 바꾸는
+    # 순간 기존 컬렉션에 넣지 못한다. 여기서 못박고 output_dimensionality 로 강제한다.
+    embed_dim: int = 768
+
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+    # 컬렉션 이름에 차원·모델을 넣지 않는다. 이름이 스키마를 설명하기 시작하면 바꿀 때마다
+    # 코드 상수까지 함께 고쳐야 한다. 재색인이 필요하면 이 값을 새 이름으로 준다.
+    qdrant_collection: str = "meeting_tuple_vector"
+
+    # few-shot 조회 자체를 끈다. Qdrant 를 아직 안 띄운 환경에서 계층만 돌려볼 때 쓴다 —
+    # 켜 둔 채로 두면 계층 호출마다 조회 실패 로그가 쌓인다(동작은 한다).
+    few_shot_enabled: bool = True
 
     # 계층 호출 실패 정책 (명세 「레이어 호출 실패 정책」)
     # 일시적 실패는 지수 백오프 3회, 지터 ±20%.
