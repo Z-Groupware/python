@@ -8,9 +8,10 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 
+from app.clients.embedding import TASK_DOCUMENT, EmbeddingClient
 from app.clients.gemini import GeminiClient
 from app.config import Settings, get_settings
-from app.layers import l1_5, l2, l3, l3_5, l4, l5
+from app.layers import few_shot, l1_5, l2, l3, l3_5, l4, l5
 from app.layers.runner import LayerRunner
 from app.schemas.l1_5 import ResolveReferenceRequest, ResolveReferenceResponse
 from app.schemas.l2 import SegmentTopicsRequest, SegmentTopicsResponse
@@ -18,6 +19,13 @@ from app.schemas.l3 import SummarizeTopicRequest, SummarizeTopicResponse
 from app.schemas.l3_5 import GateRequest, GateResponse
 from app.schemas.l4 import ExtractTuplesRequest, ExtractTuplesResponse
 from app.schemas.l5 import VerifyRequest, VerifyResponse
+from app.schemas.vector import (
+    SimilarRequest,
+    SimilarResponse,
+    VectorUpsertRequest,
+    VectorUpsertResponse,
+    VectorUpsertResult,
+)
 from app.security import require_internal_token
 
 router = APIRouter(
@@ -27,7 +35,7 @@ router = APIRouter(
 
 # AI-10 이 돌려주는 목록. 라우팅과 따로 관리하면 하나를 붙이고 다른 하나를 잊는다 —
 # 그러면 워커가 "구현됐다"를 보고 호출했다가 501 을 받는다.
-IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-10"]
+IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-08", "AI-09", "AI-10"]
 
 
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
@@ -120,17 +128,64 @@ async def internal_health(settings: Settings = Depends(get_settings)) -> dict:
     }
 
 
+# ── AI-08 · 벡터 저장 ─────────────────────────────────────────────────────────
+# Spring 이 라벨을 MySQL 에 먼저 커밋한 뒤 이걸 부른다(V5.10 · meeting_tuple_vector).
+# 원본이 저쪽에 있으므로 여기서 실패해도 라벨은 안전하고, vector_synced=false 로 남아
+# 재시도 워커가 다시 넘긴다. 그래서 **부분 성공을 행 단위로 답한다** — 배치 전체를 하나의
+# 성공/실패로 답하면 어느 행을 다시 보내야 하는지 몰라 전부 재시도하게 된다.
+@router.post("/vector/upsert", response_model=VectorUpsertResponse)
+async def vector_upsert(
+    request: VectorUpsertRequest,
+    settings: Settings = Depends(get_settings),
+) -> VectorUpsertResponse:
+    embedder = EmbeddingClient(settings)
+    if not request.items:
+        return VectorUpsertResponse(upserted=[], model=embedder.model_name)
+
+    # 임베딩 대상은 **근거 발화 원문**이다. 확정 tuple 은 payload 로만 따라간다 —
+    # tuple 을 임베딩하면 쿼리(새 발화)와 다른 공간에 놓여 유사도가 망가진다.
+    vectors = await embedder.embed([item.input_text for item in request.items], task_type=TASK_DOCUMENT)
+
+    store = few_shot.store_of(settings)
+    results = []
+    for item, vector in zip(request.items, vectors, strict=True):
+        point_id = await store.upsert(
+            vector_id=item.vector_id,
+            vector=vector,
+            company_id=item.company_id,
+            layer=item.layer,
+            provenance=item.provenance,
+            input_text=item.input_text,
+            payload=item.payload,
+            dept_id=item.dept_id,
+        )
+        results.append(VectorUpsertResult(vector_id=item.vector_id, point_id=point_id))
+
+    return VectorUpsertResponse(upserted=results, model=embedder.model_name)
+
+
+# ── AI-09 · 유사 발화 조회 ────────────────────────────────────────────────────
+# 계층은 이 엔드포인트를 거치지 않고 few_shot.lookup 을 직접 부른다(같은 프로세스 안이라
+# 왕복시킬 이유가 없다). 이 엔드포인트는 **같은 조회를 밖에서 확인할 수 있게** 열어 둔다 —
+# few-shot 이 이상할 때 계층 전체를 돌리지 않고 검색만 떼어 볼 수 있어야 한다.
+@router.post("/similar", response_model=SimilarResponse)
+async def similar(
+    request: SimilarRequest,
+    settings: Settings = Depends(get_settings),
+) -> SimilarResponse:
+    examples = await few_shot.lookup(
+        tenant_id=request.company_id,
+        layer=request.layer,
+        query_text=request.query_text,
+        dept_id=request.dept_id,
+        top_k=request.top_k,
+        provenance=request.provenance,
+        settings=settings,
+    )
+    return SimilarResponse(examples=examples, model=settings.gemini_embed_model)
+
+
 # ── 미구현 (일정 순서대로 붙는다) ──────────────────────────────────────────────
 @router.post("/vad/cutpoint")
 async def vad_cutpoint() -> JSONResponse:
     return _not_implemented("AI-01", "VAD 절단점 계산", "8/7")
-
-
-@router.post("/vector/upsert")
-async def vector_upsert() -> JSONResponse:
-    return _not_implemented("AI-08", "벡터 저장", "8/9")
-
-
-@router.post("/similar")
-async def similar() -> JSONResponse:
-    return _not_implemented("AI-09", "유사 발화 조회", "8/9")

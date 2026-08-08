@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.layers.few_shot import _STORES
 from app.main import app
 
 TOKEN = "test-internal-token"
@@ -18,9 +19,14 @@ def _settings(monkeypatch):
     monkeypatch.setenv("INTERNAL_TOKEN", TOKEN)
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("DRY_RUN", "1")
+    # AI-08·09 는 벡터 저장소를 탄다. 로컬 모드로 두면 실물 클라이언트를 그대로 쓰면서
+    # 외부 의존 없이 라우팅을 확인할 수 있다.
+    monkeypatch.setenv("QDRANT_URL", ":memory:")
     get_settings.cache_clear()
+    _STORES.clear()
     yield
     get_settings.cache_clear()
+    _STORES.clear()
 
 
 @pytest.fixture
@@ -133,6 +139,26 @@ IMPLEMENTED_CALLS = {
             "utterances": UTTERANCES,
             "participants": PARTICIPANTS,
         },
+    ),
+    # 계층이 아니라 벡터 API 다. 여기 함께 두는 이유는 implemented 목록이 계층만 담는 것이
+    # 아니기 때문이다 — 목록에 있는데 라우팅이 없으면 워커가 501 을 맞는 것은 똑같다.
+    "AI-08": (
+        "/internal/vector/upsert",
+        {
+            "items": [
+                {
+                    "vectorId": 1,
+                    "companyId": 7,
+                    "layer": "L4",
+                    "inputText": "제가 정리할게요",
+                    "payload": {"title": "정리", "assigneeMemberId": 7},
+                }
+            ]
+        },
+    ),
+    "AI-09": (
+        "/internal/similar",
+        {"companyId": 7, "layer": "L4", "queryText": "제가 정리할게요"},
     ),
 }
 
