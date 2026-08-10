@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     retry_delays_sec: tuple[float, ...] = (2.0, 8.0, 30.0)
     retry_jitter_ratio: float = 0.2
 
+    # ── AI-01 VAD ────────────────────────────────────────────────────────────
+    # silero-vad ONNX 모델 파일. **이미지에 함께 넣는다** — 런타임에 받아오면 모델이 바뀔 때
+    # 절단점이 배포와 무관하게 조용히 달라지고, "어제와 오늘의 블록 경계가 다른" 이유를
+    # 아무도 못 찾는다. 없으면 VAD_MODEL_MISSING 으로 명확히 실패한다.
+    vad_model_path: str = "/app/models/silero_vad.onnx"
+
+    # S3 리전. 자격증명은 여기 두지 않는다 — AI EC2 의 IAM 롤을 boto3 가 집는다.
+    # 키를 .env 에 두면 그 파일이 유출 표면이 되고 자동 회전도 안 된다.
+    s3_region: str = ""
+
     # 1이면 Gemini 를 부르지 않고 고정 스텁을 돌려준다. 라우팅·스키마 확인용.
     dry_run: bool = False
 

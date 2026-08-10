@@ -1,12 +1,13 @@
 """내부 API — Spring EC2 → AI EC2 (AI-01 ~ AI-10).
 
-전부 `X-Internal-Token` 을 요구한다. 아직 구현되지 않은 계층은 501 로 명확히 거절한다.
-200 에 빈 결과를 돌려주면 Spring 오케스트레이션이 "계층이 정상 완료했고 산출물이 없다"로
-기록해 버려서, 미구현이 품질 문제로 위장된다.
+전부 `X-Internal-Token` 을 요구한다.
+
+AI-01 이 붙으면서 미구현 스텁이 사라졌다. 다시 생기면 501 로 거절할 것 — 200 에 빈 결과를
+돌려주면 Spring 오케스트레이션이 "계층이 정상 완료했고 산출물이 없다"로 기록해 버려서,
+미구현이 품질 문제로 위장된다.
 """
 
-from fastapi import APIRouter, Depends, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 
 from app.clients.embedding import TASK_DOCUMENT, EmbeddingClient
 from app.clients.gemini import GeminiClient
@@ -19,6 +20,7 @@ from app.schemas.l3 import SummarizeTopicRequest, SummarizeTopicResponse
 from app.schemas.l3_5 import GateRequest, GateResponse
 from app.schemas.l4 import ExtractTuplesRequest, ExtractTuplesResponse
 from app.schemas.l5 import VerifyRequest, VerifyResponse
+from app.schemas.vad import CutpointRequest, CutpointResponse
 from app.schemas.vector import (
     SimilarRequest,
     SimilarResponse,
@@ -27,6 +29,7 @@ from app.schemas.vector import (
     VectorUpsertResult,
 )
 from app.security import require_internal_token
+from app.vad import service as vad_service
 
 router = APIRouter(
     prefix="/internal",
@@ -35,24 +38,11 @@ router = APIRouter(
 
 # AI-10 이 돌려주는 목록. 라우팅과 따로 관리하면 하나를 붙이고 다른 하나를 잊는다 —
 # 그러면 워커가 "구현됐다"를 보고 호출했다가 501 을 받는다.
-IMPLEMENTED = ["AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-08", "AI-09", "AI-10"]
+IMPLEMENTED = ["AI-01", "AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-08", "AI-09", "AI-10"]
 
 
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
     return LayerRunner(GeminiClient(settings), settings)
-
-
-def _not_implemented(api_id: str, name: str, planned: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        content={
-            "code": "LAYER_NOT_IMPLEMENTED",
-            "api": api_id,
-            "name": name,
-            "planned": planned,
-            "message": f"{api_id}({name}) 는 아직 구현되지 않았습니다. 예정: {planned}",
-        },
-    )
 
 
 # ── 계층 (파이프라인 순서대로) ────────────────────────────────────────────────
@@ -185,7 +175,20 @@ async def similar(
     return SimilarResponse(examples=examples, model=settings.gemini_embed_model)
 
 
-# ── 미구현 (일정 순서대로 붙는다) ──────────────────────────────────────────────
-@router.post("/vad/cutpoint")
-async def vad_cutpoint() -> JSONResponse:
-    return _not_implemented("AI-01", "VAD 절단점 계산", "8/7")
+# ── AI-01 · VAD 절단점 계산 ───────────────────────────────────────────────────
+# 계층이 아니라 **블록 조립의 전처리**다. 10분 경계 근처에서 사람이 말을 쉬는 지점을 찾아
+# 거기서 자른다 — 아무 데나 자르면 말 중간이 잘리고, 잘린 단어는 앞뒤 블록 어디서도 온전히
+# 인식되지 않아 그 손실이 정본에 그대로 남는다.
+#
+# 못 찾는 것은 실패가 아니다. 말이 끊이지 않는 회의에서는 700ms 무음이 없는 것이 정상이고,
+# 그때는 목표 지점에서 자르고 FALLBACK_OVERLAP 을 남긴다. 여기서 에러를 주면 블록 조립이
+# 통째로 멈춰 그 회의가 STT 를 아예 못 받는다.
+#
+# ⚠ 요청·응답 계약은 명세에 없어 **제안 상태**다(schemas/vad.py). 소비처인 Spring 블록
+# 조립 경로가 아직 없어 맞춰볼 상대가 없다.
+@router.post("/vad/cutpoint", response_model=CutpointResponse)
+async def vad_cutpoint(
+    request: CutpointRequest,
+    settings: Settings = Depends(get_settings),
+) -> CutpointResponse:
+    return await vad_service.find_cutpoint(request, settings)

@@ -25,10 +25,11 @@ Spring(BACKEND 리포)이 이 서버를 부르는 **단방향**이다.
 
 전부 `X-Internal-Token` 헤더 필수. 미구현 계층은 **501** 로 거절한다(200 + 빈 결과로 두면
 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이 품질 문제로 위장된다).
+지금은 열 개가 다 붙어 있어 501 을 내는 경로가 없다.
 
 | ID | 경로 | 상태 |
 |---|---|---|
-| AI-01 | `POST /internal/vad/cutpoint` | 예정 8/7 |
+| **AI-01** | `POST /internal/vad/cutpoint` | **구현됨** — 계약은 제안 상태(아래) |
 | **AI-02** | `POST /internal/layers/l1-5/resolve-reference` | **구현됨** |
 | **AI-03** | `POST /internal/layers/l2/segment-topics` | **구현됨** |
 | **AI-04** | `POST /internal/layers/l3/summarize-topic` | **구현됨** |
@@ -177,3 +178,53 @@ Immutable 이라 같은 커밋을 재실행하면 푸시가 실패한다. 그래
 
 컨테이너 헬스체크는 무인증 `/health` 를 쓴다. AI-10(`/internal/health`)은 토큰이 필요해서
 헬스체크로 쓸 수 없다 — 토큰을 이미지·컨테이너 설정에 심어야 하기 때문이다.
+
+---
+
+## AI-01 · VAD 절단점 계산
+
+녹음을 10분 단위로 잘라 STT 에 넣는데, **아무 데나 자르면 말하는 중간이 잘린다.** 잘린 자리의
+단어는 앞뒤 블록 어디서도 온전히 인식되지 않고 그 손실이 정본에 그대로 남아, 뒤 계층 전부가
+그 문장을 못 본다. 그래서 경계 근처에서 사람이 말을 쉬는 지점을 찾는다.
+
+```
+POST /internal/vad/cutpoint
+{ "meetingId": 500, "bucket": "z-recordings",
+  "s3Key": "org-1/recordings/meeting-500/parts/0040.webm",
+  "targetOffsetMs": 600000, "windowMs": 20000, "minSilenceMs": 700 }
+
+→ { "cutOffsetMs": 597340, "cutReason": "VAD_SILENCE", "silenceMs": 920 }
+→ { "cutOffsetMs": 600000, "cutReason": "FALLBACK_OVERLAP", "silenceMs": null }
+```
+
+> ⚠ **이 계약은 제안이다.** 명세에 AI-01 은 한 줄짜리 표 항목("S3 키로 ±20초만 전달.
+> onnxruntime 버전 silero-vad")과 동작 규칙만 있고 요청·응답 예시가 없다. 소비처인 Spring
+> 블록 조립 경로(CAP-04·05·07·10 · 김현지)가 아직 없어 맞춰볼 상대도 없다. 합의되면 바뀌는
+> 것은 `app/schemas/vad.py` 와 라우터뿐이고, 판정 로직은 그대로다.
+
+### 동작
+
+1. `bucket`/`s3Key` 로 오디오를 받는다 — 본문에 싣지 않는다(명세 「파일 전달: S3 경유」)
+2. ffmpeg 으로 `target ± window` 구간만 16kHz mono PCM 으로 푼다
+3. silero-vad(ONNX)로 프레임(32ms)마다 발화 확률을 낸다
+4. `minSilenceMs` 이상 이어진 무음 중 **목표에 가장 가까운 것**의 한가운데에서 자른다
+
+### 정한 것들
+
+- **무음 한가운데에서 자른다.** 시작·끝에서 자르면 디코딩 오차 몇십 ms 로 앞뒤 블록 중 한쪽이
+  첫 음절을 먹는다. 가운데면 그 오차를 양쪽이 나눠 흡수한다.
+- **가장 긴 무음이 아니라 가장 가까운 무음.** 창 끝의 긴 침묵을 고르면 블록이 목표에서 크게
+  벗어나고, 그 편차가 쌓이면 "10분 블록"이라는 전제가 무너진다.
+- **못 찾는 것은 실패가 아니다.** 말이 끊이지 않는 회의에서는 700ms 무음이 없는 것이 정상이라
+  목표 지점에서 자르고 `FALLBACK_OVERLAP` 을 남긴다. 여기서 에러를 주면 블록 조립이 멈춰
+  그 회의가 STT 를 아예 못 받는다.
+- **임계값(700ms · ±20초)을 요청으로 연다.** 명세가 정한 초기값이지 불변값이 아니고, 서버
+  상수로 박으면 조정할 때마다 배포해야 한다. 안 보내면 명세값으로 동작한다.
+
+### 필요한 것
+
+| | |
+|---|---|
+| ffmpeg | 런타임 이미지에 설치(Dockerfile). 청크가 webm(Opus)이라 순수 파이썬으로 못 푼다 |
+| silero-vad ONNX | `models/silero_vad.onnx` — 이미지에 함께 넣는다([models/README.md](models/README.md)) |
+| S3 권한 | AI EC2 의 IAM 롤. 액세스 키를 `.env` 에 두지 않는다 |
