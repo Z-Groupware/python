@@ -16,10 +16,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# 명세 「청크 업로드 완료 통보」의 절단 규칙에서 온 값들이다. 요청으로 덮을 수 있다 —
+# 명세 「청크 업로드 완료 통보」의 절단 규칙에서 온 값이다. 요청으로 덮을 수 있다 —
 # 튜닝 대상이라 서버 상수로 박으면 값을 바꿀 때마다 배포해야 한다.
+#
+# 탐색 창(±20초)은 여기 없다. 창을 자르는 것은 Spring 이고(설계 문서 「VAD 입력만 wav」),
+# 이 서버가 받는 wav 가 이미 그 창이다.
 DEFAULT_MIN_SILENCE_MS = 700
-DEFAULT_WINDOW_MS = 20_000
 
 # 무음 판정 임계값. silero 가 주는 발화 확률이 이 아래면 무음으로 본다.
 # 0.5 는 silero 의 관용 기본값이고, 낮추면 숨소리를 발화로 세어 무음을 못 찾는다.
@@ -108,10 +110,13 @@ def choose_cutpoint(
 ) -> Cutpoint:
     """창 안에서 절단점을 고른다. 못 찾으면 목표 지점에서 그대로 자른다.
 
-    <h2>목표에 가장 가까운 무음을 고른다</h2>
-    길이가 가장 긴 무음이 아니다. 창 끝의 아주 긴 침묵을 고르면 블록이 목표보다 20초 짧거나
-    길어지고, 그 편차가 블록마다 쌓이면 "10분 블록"이라는 전제가 무너진다. 조건(700ms)을
-    만족하는 것 중에서는 **경계에 가까울수록 낫다.**
+    <h2>가장 긴 무음을 고른다</h2>
+    설계 문서가 정한 규칙이다 — *"VAD 가 뒤쪽 ±20초에서 **가장 긴 무음**을 찾아 거기서 블록을
+    끊고"*. 긴 침묵일수록 말이 실제로 끊긴 자리이고, 절단 오차가 앞뒤 발화를 건드릴 여지도 그만큼
+    적다.
+
+    길이가 같으면 목표에 가까운 쪽을 쓴다. 순서에 맡기면 같은 입력에서 창의 앞쪽이 늘 이겨,
+    블록이 목표보다 짧아지는 편향이 생긴다.
 
     <h2>못 찾으면 실패가 아니다</h2>
     말이 끊이지 않는 회의에서는 700ms 무음이 없는 것이 정상이다. 그때는 목표 지점에서 자르고
@@ -130,14 +135,5 @@ def choose_cutpoint(
     if not candidates:
         return Cutpoint(target_offset_ms, CUT_FALLBACK_OVERLAP, None)
 
-    best = min(candidates, key=lambda run: abs(run.middle_ms - target_offset_ms))
+    best = max(candidates, key=lambda run: (run.duration_ms, -abs(run.middle_ms - target_offset_ms)))
     return Cutpoint(best.middle_ms, CUT_VAD_SILENCE, best.duration_ms)
-
-
-def window_bounds(target_offset_ms: int, window_ms: int) -> tuple[int, int]:
-    """목표 지점 ±window_ms 창. 음수로 내려가지 않는다.
-
-    회의 시작 직후에 절단이 걸리면 목표−20초가 음수가 되는데, 그대로 넘기면 디코딩 쪽이
-    파일 앞을 넘어선 구간을 요구하게 된다. 0 으로 자르는 편이 창이 짧아질 뿐 안전하다.
-    """
-    return max(0, target_offset_ms - window_ms), target_offset_ms + window_ms

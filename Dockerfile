@@ -33,17 +33,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── 실행 스테이지 ─────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
-# AI-01 이 오디오를 디코딩하는 데 쓴다. 청크는 브라우저가 만든 webm(Opus)이고 silero 는
-# 16kHz mono PCM 만 먹는데, 파이썬 순수 구현으로 Opus 를 풀 방법이 마땅치 않다.
+# ⚠ ffmpeg 을 넣지 않는다. AI-01 이 받는 것은 원본 청크(opus)가 아니라 **Spring 이 잘라 만든
+# ±20초 wav** 이고(설계 문서 「전송 포맷 — VAD 입력만 wav」), 자르고 변환하는 것은 Spring 의
+# ffmpeg 이 한다 — 오디오 원본을 다루는 쪽이 한 곳이어야 한다.
 #
-# 대안은 Spring 이 디코딩해 PCM 을 본문에 실어 보내는 것인데, 그러면 명세의 파일 전달 규칙
-# ("모든 오디오 참조는 S3 키로 넘긴다")을 어기고 ffmpeg 이 저쪽에 필요해질 뿐이다.
-#
-# --no-install-recommends 로 딸림 패키지를 막고 apt 캐시를 지운다 — 그래도 이미지가 100MB
-# 남짓 커진다. 그게 이 결정의 대가다.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# 여기에 넣으면 같은 오디오 처리가 두 곳에 생기고 이미지도 100MB 남짓 커진다.
 
 # 비루트로 돈다. 이 서버는 인터넷에 노출되지 않지만(Spring SG 에서만 인바운드),
 # 컨테이너가 뚫렸을 때 범위를 좁히는 비용이 거의 없다.

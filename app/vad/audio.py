@@ -1,22 +1,26 @@
-"""오디오 디코딩 — 컨테이너 무엇이든 16kHz mono PCM 으로.
+"""VAD 입력 wav 읽기.
 
-<h2>왜 ffmpeg 인가</h2>
-청크는 브라우저가 만든 `.webm`(Opus)이다. silero 는 **16kHz mono float PCM** 만 먹는다.
-파이썬 순수 구현으로 Opus 를 풀 방법이 마땅치 않아 시스템 ffmpeg 에 맡긴다 — 런타임 이미지에
-설치되어 있어야 한다(Dockerfile).
+<h2>디코딩하지 않는다</h2>
+받는 것은 이미 **Spring 이 잘라 만든 ±20초 wav** 다(설계 문서 「전송 포맷 — VAD 입력만 wav」).
+브라우저가 올리는 청크는 opus 지만, 그걸 푸는 것도 붙이는 것도 Spring 의 ffmpeg 이 한다 —
+**오디오 원본을 다루는 쪽이 한 곳이어야 한다**(README 「이 서버가 하지 않는 것」).
 
-<h2>필요한 구간만 뽑는다</h2>
-10분짜리 파일을 통째로 디코딩하면 20초를 보려고 그 30배를 푼다. `-ss`/`-t` 로 잘라서
-읽으므로 메모리도 시간도 창 크기에 비례한다.
+그래서 여기에 ffmpeg 이 없다. 표준 라이브러리로 wav 헤더만 읽고 PCM 을 그대로 넘긴다.
+런타임 이미지에 시스템 바이너리를 넣지 않아도 되고, 같은 오디오 처리가 두 곳에 생기지도 않는다.
+
+<h2>형식을 고쳐주지 않는다</h2>
+16kHz mono 16-bit 이 아니면 거절한다. 리샘플링을 여기서 하면 그 순간 이 서버가 오디오를
+가공하기 시작하고, 위의 경계가 무너진다. 무엇을 보내야 하는지는 계약으로 못박는 편이 낫다.
 """
 
 from __future__ import annotations
 
-import asyncio
+import io
+import wave
 
 from app.errors import LayerError, LayerErrorKind
 
-# silero 가 지원하는 샘플레이트는 8k·16k 뿐이다. 16k 를 쓴다 — 8k 는 자음 구분이 나빠져
+# silero 가 지원하는 것은 8k·16k 뿐이다. 16k 로 고정한다 — 8k 는 자음 구분이 나빠져
 # 무음 판정이 흔들린다.
 SAMPLE_RATE = 16_000
 
@@ -24,70 +28,40 @@ SAMPLE_RATE = 16_000
 FRAME_SAMPLES = 512
 FRAME_MS = FRAME_SAMPLES * 1000 // SAMPLE_RATE  # 32ms
 
-_FFMPEG = "ffmpeg"
+_BYTES_PER_SAMPLE = 2
 
 
-async def decode_window(audio: bytes, start_ms: int, duration_ms: int) -> bytes:
-    """오디오 바이트에서 [start, start+duration) 구간을 s16le PCM 으로 뽑는다.
+def read_pcm(wav_bytes: bytes) -> bytes:
+    """VAD 입력 wav → s16le PCM.
 
-    stdin 으로 넣고 stdout 으로 받는다. 임시 파일을 쓰지 않는 이유는 실패 경로에서 남는
-    파일을 지울 책임이 생기고, 그 정리가 빠지면 디스크가 조용히 찬다.
-
-    ⚠ `-ss` 를 **입력 앞에** 둔다. 출력 쪽에 두면 ffmpeg 이 파일 앞부터 전부 디코딩한 뒤
-    버리므로, 구간만 뽑으려던 이유가 사라진다.
+    형식이 다르면 PERMANENT 다. 같은 파일을 다시 보내도 같은 결과이고, 고쳐야 할 곳은
+    이 서버가 아니라 wav 를 만든 쪽이다.
     """
-    args = [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        f"{start_ms / 1000:.3f}",
-        "-t",
-        f"{duration_ms / 1000:.3f}",
-        "-i",
-        "pipe:0",
-        "-f",
-        "s16le",
-        "-acodec",
-        "pcm_s16le",
-        "-ac",
-        "1",
-        "-ar",
-        str(SAMPLE_RATE),
-        "pipe:1",
-    ]
-
     try:
-        process = await asyncio.create_subprocess_exec(
-            _FFMPEG,
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        # 이미지에 ffmpeg 이 없다. 재시도해도 같으므로 PERMANENT 다 — 배포 문제이지
-        # 이 요청의 문제가 아니라는 것이 코드에 드러나야 한다.
+        with wave.open(io.BytesIO(wav_bytes), "rb") as source:
+            channels = source.getnchannels()
+            width = source.getsampwidth()
+            rate = source.getframerate()
+            frames = source.readframes(source.getnframes())
+    except (wave.Error, EOFError) as exc:
         raise LayerError(
             LayerErrorKind.PERMANENT,
-            "FFMPEG_MISSING",
-            "ffmpeg 을 찾을 수 없습니다. 런타임 이미지에 설치되어야 합니다.",
+            "AUDIO_NOT_WAV",
+            f"VAD 입력이 wav 가 아닙니다: {exc}",
         ) from exc
 
-    stdout, stderr = await process.communicate(audio)
-
-    if process.returncode != 0:
-        # 깨진 파일이나 지원하지 않는 코덱이다. 같은 입력으로 다시 보내도 같은 결과라
-        # 재시도하지 않는다(errors.py 의 PERMANENT 정의와 같은 판단).
+    if (channels, width, rate) != (1, _BYTES_PER_SAMPLE, SAMPLE_RATE):
+        # 리샘플링해 주지 않는다 — 그 순간 이 서버가 오디오를 가공하기 시작한다.
         raise LayerError(
             LayerErrorKind.PERMANENT,
-            "AUDIO_DECODE_FAILED",
-            f"오디오를 디코딩하지 못했습니다: {stderr.decode('utf-8', 'replace')[:300]}",
+            "AUDIO_FORMAT_UNSUPPORTED",
+            f"VAD 입력은 {SAMPLE_RATE}Hz mono 16-bit wav 여야 합니다"
+            f"(받은 값: {rate}Hz {channels}ch {width * 8}-bit).",
         )
 
-    return stdout
+    return frames
 
 
 def frame_count(pcm: bytes) -> int:
     """PCM 이 몇 프레임인가. 남는 꼬리는 버린다 — silero 가 고정 길이만 받는다."""
-    return len(pcm) // (FRAME_SAMPLES * 2)
+    return len(pcm) // (FRAME_SAMPLES * _BYTES_PER_SAMPLE)

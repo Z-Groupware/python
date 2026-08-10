@@ -15,7 +15,6 @@ from app.vad.cutpoint import (
     CUT_VAD_SILENCE,
     choose_cutpoint,
     find_silence_runs,
-    window_bounds,
 )
 
 FRAME_MS = 32  # silero 16kHz 고정 창(512 샘플)
@@ -81,20 +80,29 @@ class TestChooseCutpoint:
         # 0 을 채우면 "0ms 무음을 찾았다"로 읽혀 못 찾은 것과 구분되지 않는다.
         assert cut.silence_ms is None
 
-    def test_목표에_가장_가까운_무음을_고른다(self):
-        """가장 긴 무음이 아니다.
+    def test_가장_긴_무음을_고른다(self):
+        """설계 문서가 정한 규칙이다 — "뒤쪽 ±20초에서 가장 긴 무음을 찾아 거기서 블록을 끊고".
 
-        창 끝의 아주 긴 침묵을 고르면 블록이 목표보다 크게 벗어나고, 그 편차가 블록마다
-        쌓이면 "10분 블록"이라는 전제가 무너진다.
+        긴 침묵일수록 말이 실제로 끊긴 자리이고, 절단 오차가 앞뒤 발화를 건드릴 여지도 적다.
         """
-        # 앞쪽에 짧은(그러나 조건 충족) 무음, 뒤쪽에 아주 긴 무음.
+        # 앞쪽에 조건을 넘기는 짧은 무음(25프레임), 뒤쪽에 더 긴 무음(60프레임).
+        # 목표는 앞쪽에 붙여 둔다 — "가까운 것"을 고르면 앞쪽이 뽑힌다.
         pattern = "s" * 25 + "v" * 10 + "s" * 60
-        target = 25 * FRAME_MS // 2  # 앞쪽 무음 한가운데
+        target = 25 * FRAME_MS // 2
 
         cut = choose_cutpoint(probs(pattern), frame_ms=FRAME_MS, window_start_ms=0, target_offset_ms=target)
 
         assert cut.cut_reason == CUT_VAD_SILENCE
-        assert cut.silence_ms == 25 * FRAME_MS
+        assert cut.silence_ms == 60 * FRAME_MS
+
+    def test_길이가_같으면_목표에_가까운_쪽(self):
+        # 순서에 맡기면 창의 앞쪽이 늘 이겨, 블록이 목표보다 짧아지는 편향이 생긴다.
+        pattern = "s" * 25 + "v" * 10 + "s" * 25
+        target = (35 + 12) * FRAME_MS  # 뒤쪽 무음 한가운데 근처
+
+        cut = choose_cutpoint(probs(pattern), frame_ms=FRAME_MS, window_start_ms=0, target_offset_ms=target)
+
+        assert cut.cut_offset_ms > 30 * FRAME_MS
 
     def test_무음이_전혀_없으면_목표에서_자른다(self):
         # 말이 끊이지 않는 회의에서는 정상이다. 여기서 예외를 던지면 블록 조립이 멈춰
@@ -115,13 +123,3 @@ class TestChooseCutpoint:
 
         assert choose_cutpoint(pattern, FRAME_MS, 0, 500).cut_reason == CUT_FALLBACK_OVERLAP
         assert choose_cutpoint(pattern, FRAME_MS, 0, 500, min_silence_ms=300).cut_reason == CUT_VAD_SILENCE
-
-
-class TestWindowBounds:
-    def test_목표_전후로_창을_잡는다(self):
-        assert window_bounds(600_000, 20_000) == (580_000, 620_000)
-
-    def test_음수로_내려가지_않는다(self):
-        # 회의 시작 직후에 절단이 걸리는 경우다. 음수를 그대로 넘기면 디코딩 쪽이
-        # 파일 앞을 넘어선 구간을 요구한다.
-        assert window_bounds(5_000, 20_000) == (0, 25_000)

@@ -1,38 +1,45 @@
 """AI-01 VAD 절단점 계산의 요청·응답.
 
-<h2>계약이 명세에 없다 — 이건 제안이다</h2>
-AI-02~09 은 명세에 요청·응답 예시가 있지만 AI-01 은 한 줄짜리 표 항목("S3 키로 ±20초만
-전달. onnxruntime 버전 silero-vad")과 동작 규칙(±20초 창·700ms 무음·FALLBACK_OVERLAP)뿐이다.
-소비처인 Spring 블록 조립 경로가 아직 없어 맞춰볼 상대도 없다.
+<h2>입력은 청크가 아니라 Spring 이 잘라 만든 wav 다</h2>
+설계 문서 「전송 포맷」이 정한 것이다 — 브라우저가 올리는 청크는 opus 지만 **VAD 입력만
+wav** 이고, 자르고 변환하는 것은 Spring 의 ffmpeg 이 한다. 그래서 `s3Key` 가 가리키는 것은
+원본 청크가 아니라 **이미 ±20초로 잘린 16kHz mono wav** 다.
 
-그래서 이 스키마는 **호출자와 합의되기 전의 제안**이다. 바뀌면 이 파일과 라우터만 고치면
-된다 — 판정 로직(app/vad/cutpoint.py)은 계약과 무관하게 그대로다.
+그 결과 이 서버에는 창을 자를 이유가 없고(`windowMs` 가 없는 이유), 대신 그 wav 가 회의의
+어디서 시작하는지를 알아야 절단점을 회의 기준으로 답할 수 있다(`windowStartOffsetMs`).
+
+<h2>계약은 제안 상태다</h2>
+명세에 AI-01 은 한 줄짜리 표 항목("S3 키로 ±20초만 전달. onnxruntime 버전 silero-vad")과
+동작 규칙뿐이고 요청·응답 예시가 없다. 소비처인 Spring 블록 조립 경로가 아직 없다.
+바뀌면 이 파일과 라우터만 고치면 된다 — 판정 로직(app/vad/cutpoint.py)은 그대로다.
 """
 
 from pydantic import Field
 
 from app.schemas.common import CamelModel
-from app.vad.cutpoint import DEFAULT_MIN_SILENCE_MS, DEFAULT_WINDOW_MS
+from app.vad.cutpoint import DEFAULT_MIN_SILENCE_MS
 
 
 class CutpointRequest(CamelModel):
-    """절단점을 찾을 오디오와 목표 지점.
+    """절단점을 찾을 wav 와 목표 지점.
 
-    <h2>임계값을 요청으로 연다</h2>
-    700ms·±20초는 명세가 정한 초기값이지 불변값이 아니다. 서버 상수로 박으면 값을 조정할
-    때마다 배포해야 하고, 그러면 회의별로 다른 값을 시험해 보는 것 자체가 불가능해진다.
-    기본값은 명세값이라 안 보내면 명세대로 동작한다.
+    오프셋은 전부 **회의 시작 기준 경과 ms** 다. 브라우저마다 시계가 달라 절대 시각을 쓰지
+    않는다는 설계 결정과 같은 좌표계이고, 응답도 여기 맞춰야 Spring 이 stt_block 의
+    start_ms·end_ms 에 그대로 넣을 수 있다.
     """
 
     meeting_id: int
-    s3_key: str
-    # 버킷을 요청으로 받는다. 서버 설정에 두면 회사·환경마다 서버를 따로 띄워야 한다.
     bucket: str
+    # Spring 이 만든 ±20초 wav. 원본 청크가 아니다.
+    s3_key: str
 
-    # 이 오프셋에서 자르고 싶다(= 10분 경계). 창의 중심이자 FALLBACK 시의 절단점이다.
+    # 그 wav 의 첫 샘플이 회의의 어느 지점인가. 없으면 절단점을 회의 기준으로 되돌릴 수 없다.
+    window_start_offset_ms: int = Field(ge=0)
+
+    # 여기서 자르고 싶다(= 10분 경계). 무음을 못 찾았을 때의 절단점이기도 하다.
     target_offset_ms: int = Field(ge=0)
 
-    window_ms: int = Field(default=DEFAULT_WINDOW_MS, ge=1_000, le=120_000)
+    # 명세가 정한 초기값이지 불변값이 아니다. 서버 상수로 박으면 조정할 때마다 배포해야 한다.
     min_silence_ms: int = Field(default=DEFAULT_MIN_SILENCE_MS, ge=100, le=10_000)
 
 

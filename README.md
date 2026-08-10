@@ -190,8 +190,8 @@ Immutable 이라 같은 커밋을 재실행하면 푸시가 실패한다. 그래
 ```
 POST /internal/vad/cutpoint
 { "meetingId": 500, "bucket": "z-recordings",
-  "s3Key": "org-1/recordings/meeting-500/parts/0040.webm",
-  "targetOffsetMs": 600000, "windowMs": 20000, "minSilenceMs": 700 }
+  "s3Key": "org-1/vad/meeting-500/0040.wav",
+  "windowStartOffsetMs": 580000, "targetOffsetMs": 600000, "minSilenceMs": 700 }
 
 → { "cutOffsetMs": 597340, "cutReason": "VAD_SILENCE", "silenceMs": 920 }
 → { "cutOffsetMs": 600000, "cutReason": "FALLBACK_OVERLAP", "silenceMs": null }
@@ -202,29 +202,41 @@ POST /internal/vad/cutpoint
 > 블록 조립 경로(CAP-04·05·07·10 · 김현지)가 아직 없어 맞춰볼 상대도 없다. 합의되면 바뀌는
 > 것은 `app/schemas/vad.py` 와 라우터뿐이고, 판정 로직은 그대로다.
 
+**입력은 원본 청크가 아니라 Spring 이 잘라 만든 ±20초 wav 다.** 설계 문서 「전송 포맷 —
+VAD 입력만 wav」가 정한 것이고, 자르고 변환하는 것은 Spring 의 ffmpeg 이 한다. 그래서
+이 서버에는 ffmpeg 이 없고 탐색 창을 자를 이유도 없다 — 받은 wav 가 이미 그 창이다.
+
+오프셋은 전부 **회의 시작 기준 경과 ms** 다. `windowStartOffsetMs` 가 그 wav 의 첫 샘플이
+회의의 어디인지를 알려주고, 그래야 응답의 `cutOffsetMs` 를 Spring 이 stt_block 의
+start_ms·end_ms 에 그대로 넣을 수 있다.
+
 ### 동작
 
-1. `bucket`/`s3Key` 로 오디오를 받는다 — 본문에 싣지 않는다(명세 「파일 전달: S3 경유」)
-2. ffmpeg 으로 `target ± window` 구간만 16kHz mono PCM 으로 푼다
+1. `bucket`/`s3Key` 로 wav 를 받는다 — 본문에 싣지 않는다(명세 「파일 전달: S3 경유」)
+2. 표준 라이브러리로 wav 헤더를 읽고 PCM 을 꺼낸다. **16kHz mono 16-bit 이 아니면 거절한다**
 3. silero-vad(ONNX)로 프레임(32ms)마다 발화 확률을 낸다
-4. `minSilenceMs` 이상 이어진 무음 중 **목표에 가장 가까운 것**의 한가운데에서 자른다
+4. `minSilenceMs` 이상 이어진 무음 중 **가장 긴 것**의 한가운데에서 자른다
 
 ### 정한 것들
 
 - **무음 한가운데에서 자른다.** 시작·끝에서 자르면 디코딩 오차 몇십 ms 로 앞뒤 블록 중 한쪽이
   첫 음절을 먹는다. 가운데면 그 오차를 양쪽이 나눠 흡수한다.
-- **가장 긴 무음이 아니라 가장 가까운 무음.** 창 끝의 긴 침묵을 고르면 블록이 목표에서 크게
-  벗어나고, 그 편차가 쌓이면 "10분 블록"이라는 전제가 무너진다.
+- **가장 긴 무음을 고른다.** 설계 문서가 정한 규칙이다. 긴 침묵일수록 말이 실제로 끊긴
+  자리이고, 절단 오차가 앞뒤 발화를 건드릴 여지도 적다. 길이가 같으면 목표에 가까운 쪽 —
+  순서에 맡기면 창 앞쪽이 늘 이겨 블록이 짧아지는 편향이 생긴다.
 - **못 찾는 것은 실패가 아니다.** 말이 끊이지 않는 회의에서는 700ms 무음이 없는 것이 정상이라
   목표 지점에서 자르고 `FALLBACK_OVERLAP` 을 남긴다. 여기서 에러를 주면 블록 조립이 멈춰
   그 회의가 STT 를 아예 못 받는다.
-- **임계값(700ms · ±20초)을 요청으로 연다.** 명세가 정한 초기값이지 불변값이 아니고, 서버
-  상수로 박으면 조정할 때마다 배포해야 한다. 안 보내면 명세값으로 동작한다.
+- **임계값(700ms)을 요청으로 연다.** 명세가 정한 초기값이지 불변값이 아니고, 서버 상수로
+  박으면 조정할 때마다 배포해야 한다. 안 보내면 명세값으로 동작한다. 탐색 창(±20초)은 여기
+  값이 아니다 — 창을 자르는 것은 Spring 이다.
+- **오디오를 가공하지 않는다.** 형식이 다르면 리샘플링해 주지 않고 거절한다. 고쳐 주기 시작하면
+  그 순간 오디오 처리가 두 곳에 생기고, "원본을 다루는 쪽은 한 곳"이라는 경계가 무너진다.
 
 ### 필요한 것
 
 | | |
 |---|---|
-| ffmpeg | 런타임 이미지에 설치(Dockerfile). 청크가 webm(Opus)이라 순수 파이썬으로 못 푼다 |
+| VAD 입력 wav | Spring 이 만든다 — ±20초 · **16kHz mono 16-bit**. 이 서버에는 ffmpeg 이 없다 |
 | silero-vad ONNX | `models/silero_vad.onnx` — 이미지에 함께 넣는다([models/README.md](models/README.md)) |
 | S3 권한 | AI EC2 의 IAM 롤. 액세스 키를 `.env` 에 두지 않는다 |

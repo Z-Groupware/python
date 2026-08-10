@@ -76,7 +76,8 @@ def test_AI_01_은_스텁이_아니라_실제_핸들러에_닿는다(client):
         json={
             "meetingId": 500,
             "bucket": "z-recordings",
-            "s3Key": "org-1/parts/0040.webm",
+            "s3Key": "org-1/vad/meeting-500/0040.wav",
+            "windowStartOffsetMs": 580_000,
             "targetOffsetMs": 600_000,
         },
     )
