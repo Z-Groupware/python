@@ -33,6 +33,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── 실행 스테이지 ─────────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
+# ⚠ ffmpeg 을 넣지 않는다. AI-01 이 받는 것은 원본 청크(opus)가 아니라 **Spring 이 잘라 만든
+# ±20초 wav** 이고(설계 문서 「전송 포맷 — VAD 입력만 wav」), 자르고 변환하는 것은 Spring 의
+# ffmpeg 이 한다 — 오디오 원본을 다루는 쪽이 한 곳이어야 한다.
+#
+# 여기에 넣으면 같은 오디오 처리가 두 곳에 생기고 이미지도 100MB 남짓 커진다.
+
 # 비루트로 돈다. 이 서버는 인터넷에 노출되지 않지만(Spring SG 에서만 인바운드),
 # 컨테이너가 뚫렸을 때 범위를 좁히는 비용이 거의 없다.
 RUN groupadd --system --gid 1001 app \
@@ -40,6 +46,11 @@ RUN groupadd --system --gid 1001 app \
 
 WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
+
+# silero-vad ONNX 모델. **이미지에 함께 넣는다** — 런타임에 받아오면 모델이 바뀔 때 절단점이
+# 배포와 무관하게 조용히 달라지고, "어제와 오늘의 블록 경계가 다른" 이유를 아무도 못 찾는다.
+# 파일이 없으면 AI-01 이 VAD_MODEL_MISSING(PERMANENT)으로 명확히 거절한다.
+COPY --chown=app:app models/ /app/models/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

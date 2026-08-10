@@ -60,13 +60,37 @@ def test_인프라_liveness는_무인증(client):
     assert response.status_code == 200
 
 
-def test_미구현_계층은_501로_거절한다(client):
-    response = client.post("/internal/vad/cutpoint", headers={"X-Internal-Token": TOKEN})
+def test_AI_01_은_스텁이_아니라_실제_핸들러에_닿는다(client):
+    """AI-01 은 스모크로 200 을 요구할 수 없다 — S3·ffmpeg·모델 파일이 전부 있어야 한다.
 
-    # 200 + 빈 결과로 두면 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해
-    # 미구현이 품질 문제로 위장된다.
-    assert response.status_code == 501
-    assert response.json()["api"] == "AI-01"
+    그래도 **라우팅이 실제 핸들러에 닿는지**는 지켜야 한다. 스텁이 남아 있으면 501 이고,
+    스키마가 요청을 거르면 FastAPI 의 검증 422(`detail`)라 핸들러를 지나지 못한다.
+    둘 다 아니고 LayerError 의 모양(`code`)이 나오면 핸들러 안까지 들어간 것이다.
+
+    이 환경에서는 boto3 가 없어 S3_RUNTIME_MISSING(PERMANENT → 422)이 나온다. 그 코드 자체를
+    못박지는 않는다 — 의존성이 깔린 환경에서는 S3 단계에서 다른 코드가 나오는 것이 정상이다.
+    """
+    response = client.post(
+        "/internal/vad/cutpoint",
+        headers={"X-Internal-Token": TOKEN},
+        json={
+            "meetingId": 500,
+            "bucket": "z-recordings",
+            "s3Key": "org-1/vad/meeting-500/0040.wav",
+            "windowStartOffsetMs": 580_000,
+            "targetOffsetMs": 600_000,
+        },
+    )
+
+    assert response.status_code != 501, "미구현 스텁이 남아 있다"
+    body = response.json()
+
+    # S3·모델·객체가 다 있는 환경에서는 200 이 정상이다. 그때 CutpointResponse 에는 code 가
+    # 없으므로, code 만 요구하면 제대로 도는 환경에서 오히려 실패한다(CodeRabbit PR #15).
+    if response.status_code == 200:
+        assert "cutReason" in body
+    else:
+        assert "code" in body, f"핸들러에 닿지 못했다: {response.status_code} {response.text}"
 
 
 PARTICIPANTS = [{"personId": 7, "name": "김서준"}]
@@ -165,6 +189,11 @@ IMPLEMENTED_CALLS = {
 # 본문 없이 GET 으로 확인되는 계층. 위 표와 합쳐 implemented 전체와 대조한다.
 BODYLESS_IMPLEMENTED = {"AI-10"}
 
+# 외부 자원이 있어야 200 이 되는 API. 스모크 호출로 200 을 요구할 수 없다 — AI-01 은
+# S3·ffmpeg·모델 파일이 전부 있어야 한다. 라우팅이 실제 핸들러에 닿는지는 위의 전용
+# 테스트가 따로 본다. 여기서 빼면 implemented 목록 대조가 그만큼 헐거워지므로 남겨 둔다.
+EXTERNAL_DEPENDENCY_IMPLEMENTED = {"AI-01"}
+
 
 def test_health의_구현목록이_실제_라우팅과_일치한다(client):
     """AI-10 이 답하는 `implemented` 와 실제로 도는 계층이 **양방향으로** 같아야 한다.
@@ -179,7 +208,7 @@ def test_health의_구현목록이_실제_라우팅과_일치한다(client):
     """
     implemented = client.get("/internal/health", headers={"X-Internal-Token": TOKEN}).json()["implemented"]
 
-    assert set(implemented) == set(IMPLEMENTED_CALLS) | BODYLESS_IMPLEMENTED
+    assert set(implemented) == set(IMPLEMENTED_CALLS) | BODYLESS_IMPLEMENTED | EXTERNAL_DEPENDENCY_IMPLEMENTED
 
     for api_id, (path, body) in IMPLEMENTED_CALLS.items():
         response = client.post(path, headers={"X-Internal-Token": TOKEN}, json=body)

@@ -12,6 +12,13 @@ dependencies = [
     # AI-08·09 벡터 인덱스. 테스트는 이 패키지의 로컬 모드(":memory:")로 같은 코드 경로를
     # 돌린다 — 가짜 저장소를 따로 두면 우리가 맞다고 믿는 대로만 동작한다.
     "qdrant-client>=1.12",
+    # AI-01 VAD. onnxruntime 을 직접 쓴다 — silero 래퍼 패키지는 torch 를 끌어와
+    # 추론만 하는 서버에 학습 프레임워크가 들어간다(이미지가 GB 단위로 커진다).
+    "onnxruntime>=1.20",
+    "numpy>=2.1",
+    # 오디오는 본문이 아니라 S3 키로 온다(명세 「내부 API 규칙」). 자격증명은 설정에 두지
+    # 않고 AI EC2 의 IAM 롤을 boto3 가 집는다.
+    "boto3>=1.35",
 ]
 
 [dependency-groups]
