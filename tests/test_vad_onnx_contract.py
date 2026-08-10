@@ -23,9 +23,13 @@ from app.vad.silero import speech_probs
 
 MODEL = Path(__file__).resolve().parent.parent / "models" / "silero_vad.onnx"
 
-pytestmark = pytest.mark.skipif(not MODEL.is_file(), reason=f"모델 파일이 없다: {MODEL}")
+# ⚠ 모듈 전체에 걸지 않는다. "모델이 없으면 거절한다"는 테스트는 **모델이 없을 때 돌아야 할
+# 테스트**인데, 모듈 스킵이면 정확히 그 상황에서 건너뛴다 — 검증하려던 조건이 스킵 조건과
+# 같아지는 자리다(CodeRabbit PR #15). 모델을 실제로 여는 테스트에만 붙인다.
+needs_model = pytest.mark.skipif(not MODEL.is_file(), reason=f"모델 파일이 없다: {MODEL}")
 
 
+@needs_model
 def test_모델이_코드가_아는_이름과_모양을_요구한다():
     import onnxruntime
 
@@ -41,6 +45,7 @@ def test_모델이_코드가_아는_이름과_모양을_요구한다():
     assert len(session.get_outputs()) == 2
 
 
+@needs_model
 def test_프레임_수만큼_확률이_나온다():
     """플러밍 검증이다 — state 를 이어 넘기는 것까지 포함해 끝까지 도는지 본다.
 
@@ -57,6 +62,7 @@ def test_프레임_수만큼_확률이_나온다():
     assert all(0.0 <= p <= 1.0 for p in probs)
 
 
+@needs_model
 def test_프레임을_못_채우면_빈_결과다():
     # 0 으로 채워 넣으면 그 패딩이 무음으로 잡혀 없는 무음이 하나 생긴다.
     pcm = (np.zeros(FRAME_SAMPLES - 1)).astype(np.int16).tobytes()

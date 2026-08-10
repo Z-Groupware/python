@@ -84,7 +84,13 @@ def test_AI_01_은_스텁이_아니라_실제_핸들러에_닿는다(client):
 
     assert response.status_code != 501, "미구현 스텁이 남아 있다"
     body = response.json()
-    assert "code" in body, f"핸들러에 닿지 못했다: {response.status_code} {response.text}"
+
+    # S3·모델·객체가 다 있는 환경에서는 200 이 정상이다. 그때 CutpointResponse 에는 code 가
+    # 없으므로, code 만 요구하면 제대로 도는 환경에서 오히려 실패한다(CodeRabbit PR #15).
+    if response.status_code == 200:
+        assert "cutReason" in body
+    else:
+        assert "code" in body, f"핸들러에 닿지 못했다: {response.status_code} {response.text}"
 
 
 PARTICIPANTS = [{"personId": 7, "name": "김서준"}]

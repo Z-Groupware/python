@@ -31,25 +31,43 @@ def _client(region: str):
     return boto3.client("s3", region_name=region or None)
 
 
-async def fetch(bucket: str, key: str, region: str = "") -> bytes:
-    """객체를 통째로 받아온다.
+async def fetch(bucket: str, key: str, region: str = "", max_bytes: int | None = None) -> bytes:
+    """객체를 받아온다. 상한을 넘으면 받다 말고 거절한다.
 
     boto3 는 동기라 스레드로 뺀다 — 이벤트 루프에서 그대로 부르면 다운로드 동안 다른 요청이
     전부 멈춘다. 계층 서버는 한 번에 여러 회의를 받는다.
 
-    <h2>범위 요청(Range)을 쓰지 않는다</h2>
-    청크 하나가 15초 분량이라 파일 자체가 작고, webm 은 컨테이너라 바이트 범위와 시간 범위가
-    대응하지 않는다. 시간으로 자르는 것은 디코딩 단계(ffmpeg -ss)의 몫이다.
+    <h2>범위 요청으로 상한을 건다</h2>
+    **이 서버는 무엇을 받을지 고를 수 없다.** s3Key 는 요청이 정하고, 실수든 아니든 10분짜리
+    원본을 가리키면 그 전부가 메모리에 올라온다. t3.medium 한 대에 Qdrant 까지 같이 떠 있어
+    그건 곧 인스턴스 전체의 정지다.
+
+    상한+1 바이트를 요청해서, 그만큼 다 오면 "더 있다"는 뜻이므로 거절한다. HeadObject 로
+    크기를 먼저 묻는 방법도 있지만 왕복이 하나 늘고, 그 사이에 객체가 바뀌면 검사한 크기와
+    받은 크기가 갈린다.
     """
     client = _client(region)
 
     def _get() -> bytes:
-        return client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        kwargs: dict = {"Bucket": bucket, "Key": key}
+        if max_bytes is not None:
+            kwargs["Range"] = f"bytes=0-{max_bytes}"
+        return client.get_object(**kwargs)["Body"].read()
 
     try:
-        return await asyncio.to_thread(_get)
+        data = await asyncio.to_thread(_get)
     except Exception as exc:
         raise _classify(exc, bucket, key) from exc
+
+    if max_bytes is not None and len(data) > max_bytes:
+        # 잘라서 넘기지 않는다. 잘린 wav 는 헤더가 말하는 길이와 실제가 어긋나 판정이
+        # 조용히 이상해진다 — 거절해서 보내는 쪽이 고치게 하는 편이 낫다.
+        raise LayerError(
+            LayerErrorKind.PERMANENT,
+            "AUDIO_TOO_LARGE",
+            f"VAD 입력이 상한({max_bytes} bytes)을 넘습니다: s3://{bucket}/{key}",
+        )
+    return data
 
 
 def _classify(exc: Exception, bucket: str, key: str) -> LayerError:

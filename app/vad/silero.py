@@ -19,7 +19,9 @@ silero v5 는 RNN 이라 프레임 사이에 상태가 흐른다. 매 프레임 
 
 from __future__ import annotations
 
+import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +35,30 @@ _STATE_SHAPE = (2, 1, 128)
 _lock = threading.Lock()
 _session = None
 _session_path: str | None = None
+
+_executor_lock = threading.Lock()
+_executor: ThreadPoolExecutor | None = None
+_executor_size: int | None = None
+
+
+def _executor_of(max_workers: int) -> ThreadPoolExecutor:
+    """추론 전용 스레드 풀. **크기를 우리가 정한다.**
+
+    기본 실행기(asyncio.to_thread)를 쓰면 크기가 `min(32, cpu+4)` 라 동시 요청이 몰릴 때
+    CPU 코어보다 많은 추론이 서로 코어를 뺏는다. t3.medium(2 vCPU)에 Qdrant 까지 같이 떠
+    있어 전부가 느려지고, 그러면 헬스체크까지 늦어져 컨테이너가 재시작된다.
+
+    onnxruntime 세션도 스레드를 1 로 묶어 두었다(_load) — 병렬은 여기 한 곳에서만 정한다.
+    """
+    global _executor, _executor_size
+
+    with _executor_lock:
+        if _executor is None or _executor_size != max_workers:
+            if _executor is not None:
+                _executor.shutdown(wait=False)
+            _executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vad")
+            _executor_size = max_workers
+        return _executor
 
 
 def _load(model_path: str):
@@ -105,3 +131,14 @@ def speech_probs(pcm: bytes, model_path: str) -> list[float]:
         state = outputs[1]
 
     return probs
+
+
+async def speech_probs_async(pcm: bytes, model_path: str, max_workers: int) -> list[float]:
+    """추론을 이벤트 루프 밖에서 돌린다.
+
+    40초 창이면 프레임이 1250 개고 그만큼 session.run 이 돈다. 이걸 루프에서 그대로 부르면
+    그 동안 **다른 요청도 /health 도 전부 멈춘다** — 워커가 하나뿐이라 헬스체크가 늦어지면
+    컨테이너가 재시작되고, 돌던 요청까지 함께 죽는다.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_executor_of(max_workers), speech_probs, pcm, model_path)

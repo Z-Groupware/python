@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # 아무도 못 찾는다. 없으면 VAD_MODEL_MISSING 으로 명확히 실패한다.
     vad_model_path: str = "/app/models/silero_vad.onnx"
 
+    # 동시에 도는 VAD 추론 수. 기본 실행기(min(32, cpu+4))에 맡기지 않는 이유는 t3.medium
+    # (2 vCPU)에 Qdrant 까지 같이 떠 있어, 코어보다 많은 추론이 서로 코어를 뺏으면 헬스체크까지
+    # 늦어져 컨테이너가 재시작되기 때문이다. 인스턴스를 키우면 이 값을 올린다.
+    vad_max_workers: int = 1
+
     # S3 리전. 자격증명은 여기 두지 않는다 — AI EC2 의 IAM 롤을 boto3 가 집는다.
     # 키를 .env 에 두면 그 파일이 유출 표면이 되고 자동 회전도 안 된다.
     s3_region: str = ""

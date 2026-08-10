@@ -12,7 +12,7 @@ from app.clients import s3
 from app.config import Settings
 from app.schemas.vad import CutpointRequest, CutpointResponse
 from app.vad import silero
-from app.vad.audio import FRAME_MS, read_pcm
+from app.vad.audio import FRAME_MS, MAX_WAV_BYTES, read_pcm
 from app.vad.cutpoint import CUT_FALLBACK_OVERLAP, choose_cutpoint
 
 log = logging.getLogger(__name__)
@@ -20,10 +20,11 @@ log = logging.getLogger(__name__)
 
 async def find_cutpoint(request: CutpointRequest, settings: Settings) -> CutpointResponse:
     """절단점을 찾는다. 못 찾는 것은 실패가 아니다."""
-    wav = await s3.fetch(request.bucket, request.s3_key, settings.s3_region)
+    # 상한을 걸어 받는다 — s3Key 는 요청이 정하고, 원본을 가리키면 그 전부가 메모리에 올라온다.
+    wav = await s3.fetch(request.bucket, request.s3_key, settings.s3_region, MAX_WAV_BYTES)
     pcm = read_pcm(wav)
 
-    probs = silero.speech_probs(pcm, settings.vad_model_path)
+    probs = await silero.speech_probs_async(pcm, settings.vad_model_path, settings.vad_max_workers)
     if not probs:
         # 프레임 하나를 못 채울 만큼 짧다. 목표에서 자르고 이유를 남긴다 — 여기서 예외를
         # 던지면 블록 조립이 멈춰 그 회의가 STT 를 아예 못 받는다.

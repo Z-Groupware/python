@@ -12,7 +12,7 @@ import wave
 import pytest
 
 from app.errors import LayerError, LayerErrorKind
-from app.vad.audio import FRAME_SAMPLES, SAMPLE_RATE, frame_count, read_pcm
+from app.vad.audio import FRAME_SAMPLES, MAX_FRAMES, SAMPLE_RATE, frame_count, read_pcm
 
 
 def wav_bytes(samples: int, *, rate: int = SAMPLE_RATE, channels: int = 1, width: int = 2) -> bytes:
@@ -47,6 +47,24 @@ class TestReadPcm:
         assert caught.value.kind is LayerErrorKind.PERMANENT
         assert caught.value.code == "AUDIO_FORMAT_UNSUPPORTED"
         assert not caught.value.retryable
+
+    def test_40초까지는_받는다(self):
+        # 탐색 창이 ±20초라 40초가 상한이다. 경계값을 거절하면 정상 입력이 막힌다.
+        pcm = read_pcm(wav_bytes(MAX_FRAMES))
+
+        assert len(pcm) == MAX_FRAMES * 2
+
+    def test_40초를_넘으면_거절한다(self):
+        """이 서버는 무엇을 받을지 고를 수 없다 — s3Key 는 요청이 정한다.
+
+        실수든 아니든 10분짜리 원본을 가리키면 그 전부가 메모리에 올라온 뒤 프레임 수만큼
+        추론이 돈다. t3.medium 한 대에 Qdrant 까지 같이 떠 있어 그건 곧 인스턴스 전체의 정지다.
+        """
+        with pytest.raises(LayerError) as caught:
+            read_pcm(wav_bytes(MAX_FRAMES + 1))
+
+        assert caught.value.code == "AUDIO_TOO_LONG"
+        assert caught.value.kind is LayerErrorKind.PERMANENT
 
     def test_wav_가_아니면_거절한다(self):
         with pytest.raises(LayerError) as caught:

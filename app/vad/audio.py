@@ -30,6 +30,17 @@ FRAME_MS = FRAME_SAMPLES * 1000 // SAMPLE_RATE  # 32ms
 
 _BYTES_PER_SAMPLE = 2
 
+# 받아들일 최대 길이. 설계의 탐색 창이 ±20초라 40초가 상한이고, 회의 시작·끝에서는 그보다 짧다.
+#
+# 상한을 두는 이유는 **이 서버가 무엇을 받을지 고를 수 없기 때문**이다. s3Key 는 요청이 정하고,
+# 실수든 아니든 10분짜리 원본을 가리키면 그 전부가 메모리에 올라온 뒤 프레임 수만큼 추론이 돈다.
+# t3.medium 한 대에 Qdrant 까지 같이 떠 있어 그게 곧 인스턴스 전체의 정지다.
+MAX_WINDOW_MS = 40_000
+MAX_FRAMES = SAMPLE_RATE * MAX_WINDOW_MS // 1000
+
+# wav 헤더 여유를 더한 바이트 상한. S3 에서 받을 때 이만큼만 읽는다.
+MAX_WAV_BYTES = MAX_FRAMES * _BYTES_PER_SAMPLE + 4096
+
 
 def read_pcm(wav_bytes: bytes) -> bytes:
     """VAD 입력 wav → s16le PCM.
@@ -42,7 +53,18 @@ def read_pcm(wav_bytes: bytes) -> bytes:
             channels = source.getnchannels()
             width = source.getsampwidth()
             rate = source.getframerate()
-            frames = source.readframes(source.getnframes())
+            total = source.getnframes()
+
+            # readframes **앞에서** 막는다. 읽고 나서 재면 이미 메모리에 올라온 뒤다.
+            if total > MAX_FRAMES:
+                raise LayerError(
+                    LayerErrorKind.PERMANENT,
+                    "AUDIO_TOO_LONG",
+                    f"VAD 입력은 {MAX_WINDOW_MS // 1000}초를 넘을 수 없습니다"
+                    f"(받은 값: {total * 1000 // rate if rate else '?'}ms).",
+                )
+
+            frames = source.readframes(total)
     except (wave.Error, EOFError) as exc:
         raise LayerError(
             LayerErrorKind.PERMANENT,

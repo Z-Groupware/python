@@ -187,15 +187,13 @@ Immutable 이라 같은 커밋을 재실행하면 푸시가 실패한다. 그래
 단어는 앞뒤 블록 어디서도 온전히 인식되지 않고 그 손실이 정본에 그대로 남아, 뒤 계층 전부가
 그 문장을 못 본다. 그래서 경계 근처에서 사람이 말을 쉬는 지점을 찾는다.
 
-```
-POST /internal/vad/cutpoint
-{ "meetingId": 500, "bucket": "z-recordings",
-  "s3Key": "org-1/vad/meeting-500/0040.wav",
-  "windowStartOffsetMs": 580000, "targetOffsetMs": 600000, "minSilenceMs": 700 }
+    POST /internal/vad/cutpoint
+    { "meetingId": 500, "bucket": "z-recordings",
+      "s3Key": "org-1/vad/meeting-500/0040.wav",
+      "windowStartOffsetMs": 580000, "targetOffsetMs": 600000, "minSilenceMs": 700 }
 
-→ { "cutOffsetMs": 597340, "cutReason": "VAD_SILENCE", "silenceMs": 920 }
-→ { "cutOffsetMs": 600000, "cutReason": "FALLBACK_OVERLAP", "silenceMs": null }
-```
+    → { "cutOffsetMs": 597340, "cutReason": "VAD_SILENCE", "silenceMs": 920 }
+    → { "cutOffsetMs": 600000, "cutReason": "FALLBACK_OVERLAP", "silenceMs": null }
 
 > ⚠ **이 계약은 제안이다.** 명세에 AI-01 은 한 줄짜리 표 항목("S3 키로 ±20초만 전달.
 > onnxruntime 버전 silero-vad")과 동작 규칙만 있고 요청·응답 예시가 없다. 소비처인 Spring
@@ -237,6 +235,6 @@ start_ms·end_ms 에 그대로 넣을 수 있다.
 
 | | |
 |---|---|
-| VAD 입력 wav | Spring 이 만든다 — ±20초 · **16kHz mono 16-bit**. 이 서버에는 ffmpeg 이 없다 |
+| VAD 입력 wav | Spring 이 만든다 — **최대 40초(±20초) · 16kHz mono 16-bit**. 넘으면 거절한다 |
 | silero-vad ONNX | `models/silero_vad.onnx` — 이미지에 함께 넣는다([models/README.md](models/README.md)) |
 | S3 권한 | AI EC2 의 IAM 롤. 액세스 키를 `.env` 에 두지 않는다 |
