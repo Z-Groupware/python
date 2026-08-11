@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from app.clients.embedding import TASK_DOCUMENT, EmbeddingClient
 from app.clients.gemini import GeminiClient
 from app.config import Settings, get_settings
-from app.layers import few_shot, l1_5, l2, l3, l3_5, l4, l5
+from app.layers import few_shot, l1_5, l2, l3, l3_5, l4, l5, overview
 from app.layers.runner import LayerRunner
 from app.schemas.l1_5 import ResolveReferenceRequest, ResolveReferenceResponse
 from app.schemas.l2 import SegmentTopicsRequest, SegmentTopicsResponse
@@ -20,6 +20,7 @@ from app.schemas.l3 import SummarizeTopicRequest, SummarizeTopicResponse
 from app.schemas.l3_5 import GateRequest, GateResponse
 from app.schemas.l4 import ExtractTuplesRequest, ExtractTuplesResponse
 from app.schemas.l5 import VerifyRequest, VerifyResponse
+from app.schemas.overview import SummarizeMeetingRequest, SummarizeMeetingResponse
 from app.schemas.vad import CutpointRequest, CutpointResponse
 from app.schemas.vector import (
     SimilarRequest,
@@ -38,7 +39,10 @@ router = APIRouter(
 
 # AI-10 이 돌려주는 목록. 라우팅과 따로 관리하면 하나를 붙이고 다른 하나를 잊는다 —
 # 그러면 워커가 "구현됐다"를 보고 호출했다가 501 을 받는다.
-IMPLEMENTED = ["AI-01", "AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-08", "AI-09", "AI-10"]
+IMPLEMENTED = [
+    "AI-01", "AI-02", "AI-03", "AI-04", "AI-05", "AI-06", "AI-07", "AI-08", "AI-09", "AI-10",
+    "AI-11",
+]
 
 
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
@@ -101,6 +105,22 @@ async def verify(
     runner: LayerRunner = Depends(get_runner),
 ) -> VerifyResponse:
     return await l5.verify(request, runner)
+
+
+# AI-11 · OVERVIEW 회의 개요 — 파이프라인의 맨 끝. 회의당 한 번.
+#
+# 발화를 받지 않는 유일한 계층이다. 전사를 다시 읽히면 주제 요약과 다른 말을 하는 개요가
+# 나오고, 개요 칸은 Spring 이 이 출력으로 덮는 자리라 그 값을 되먹이면 자기 출력을 다시
+# 압축한다(schemas/overview.py 주석).
+#
+# 실패해도 Spring 은 회의를 완료로 둔다 — 개요 칸에 주제 요약을 이어 붙인 값이 남아 있다.
+# 그래서 이 엔드포인트가 없던 동안에도 파이프라인은 끝까지 돌았다(404 → 계층만 FAILED).
+@router.post("/layers/overview/summarize-meeting", response_model=SummarizeMeetingResponse)
+async def summarize_meeting(
+    request: SummarizeMeetingRequest,
+    runner: LayerRunner = Depends(get_runner),
+) -> SummarizeMeetingResponse:
+    return await overview.summarize_meeting(request, runner)
 
 
 # ── AI-10 · 헬스체크 — 워커 백오프 판단용 ──────────────────────────────────────
