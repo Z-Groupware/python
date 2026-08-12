@@ -108,6 +108,22 @@ IMPLEMENTED_CALLS = {
         "/internal/layers/l2/segment-topics",
         {"tenantId": 7, "meetingId": 500, "utterances": UTTERANCES},
     ),
+    # 발화가 없는 유일한 본문이다 — 개요는 확정 항목만 읽는다(schemas/overview.py 주석).
+    "AI-11": (
+        "/internal/layers/overview/summarize-meeting",
+        {
+            "tenantId": 7,
+            "meetingId": 500,
+            "topics": [
+                {
+                    "topicSeq": 1,
+                    "topic": "제품 로드맵",
+                    "items": [{"itemType": "DECISION", "content": "A/B 테스트 도구를 비교하기로 함"}],
+                }
+            ],
+            "participants": PARTICIPANTS,
+        },
+    ),
     "AI-04": (
         "/internal/layers/l3/summarize-topic",
         {
