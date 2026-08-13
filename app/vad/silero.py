@@ -15,6 +15,17 @@ GB 단위로 커진다.
 silero v5 는 RNN 이라 프레임 사이에 상태가 흐른다. 매 프레임 0 으로 초기화하면 모델이
 직전 맥락을 잃고, 말 중간의 짧은 숨을 전부 무음으로 본다 — 그러면 700ms 조건을 만족하는
 가짜 무음이 창마다 생긴다.
+
+<h2>프레임 앞에 직전 64 샘플을 붙인다</h2>
+v5 는 16kHz 에서 **576 샘플**(직전 프레임 꼬리 64 + 새 512)을 받는다. 앞의 64 는 내부
+STFT 가 프레임 경계에서 쓰는 컨텍스트라, 이것 없이 512 만 넣으면 모델이 **모든 프레임을
+무음으로 본다.** 입력 shape 가 `[None, None]` 이라 512 를 넣어도 예외 없이 돌아가므로
+그 오작동이 조용하다 — 실제로 그 상태였고, 전 프레임이 무음이면 창 전체가 무음 런 하나가
+되어 `VAD_SILENCE` 로 목표 지점에서 자른다. VAD 를 안 쓴 것과 결과가 같은데 성공으로
+기록되는, 가장 나쁜 모양의 실패였다(41분 실오디오에서 발화 프레임 0/1875 로 확인).
+
+공식 래퍼(torch)가 해 주던 일이다. 래퍼를 안 쓰는 판단은 유지하되, 래퍼가 하던 일 중
+빠뜨리면 안 되는 것이 이것이다.
 """
 
 from __future__ import annotations
@@ -31,6 +42,10 @@ from app.vad.audio import FRAME_SAMPLES, SAMPLE_RATE
 
 # silero v5 의 은닉 상태 모양. 모델이 요구하는 값이라 바꿀 수 없다.
 _STATE_SHAPE = (2, 1, 128)
+
+# 프레임 앞에 붙이는 직전 샘플 수(16kHz 기준). 모델이 요구하는 값이라 바꿀 수 없다 —
+# 512 + 64 = 576 이 v5 의 입력 길이다. 8kHz 로 내리면 32 이지만 이 서버는 16k 고정이다.
+_CONTEXT_SAMPLES = 64
 
 _lock = threading.Lock()
 _session = None
@@ -121,14 +136,21 @@ def speech_probs(pcm: bytes, model_path: str) -> list[float]:
     state = np.zeros(_STATE_SHAPE, dtype=np.float32)
     sample_rate = np.array(SAMPLE_RATE, dtype=np.int64)
 
+    # 첫 프레임의 컨텍스트는 0 이다 — 창의 시작 앞에는 우리가 받은 오디오가 없다.
+    # 호출마다 새로 시작한다(state 와 같은 이유): 앞 요청의 꼬리를 이어 쓰면 창 하나의
+    # 판정이 직전에 어떤 요청이 왔는지에 따라 달라진다.
+    context = np.zeros((1, _CONTEXT_SAMPLES), dtype=np.float32)
+
     probs: list[float] = []
     for frame in frames:
+        window = np.concatenate([context, frame.reshape(1, -1)], axis=1)
         outputs = session.run(
             None,
-            {"input": frame.reshape(1, -1), "state": state, "sr": sample_rate},
+            {"input": window, "state": state, "sr": sample_rate},
         )
         probs.append(float(outputs[0][0][0]))
         state = outputs[1]
+        context = frame[-_CONTEXT_SAMPLES:].reshape(1, -1)
 
     return probs
 

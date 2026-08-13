@@ -18,8 +18,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from app.vad import silero
 from app.vad.audio import FRAME_SAMPLES, SAMPLE_RATE
-from app.vad.silero import speech_probs
+from app.vad.silero import _CONTEXT_SAMPLES, speech_probs
 
 MODEL = Path(__file__).resolve().parent.parent / "models" / "silero_vad.onnx"
 
@@ -60,6 +61,70 @@ def test_프레임_수만큼_확률이_나온다():
 
     assert len(probs) == frames
     assert all(0.0 <= p <= 1.0 for p in probs)
+
+
+class _입력을_기록하는_세션:
+    """실제 추론 대신 넘어온 입력만 모은다.
+
+    모델을 진짜로 돌리지 않는 이유는, 검증하려는 것이 **모델의 판정**이 아니라 우리가
+    모델에 넣는 입력의 모양이기 때문이다. 판정을 합성 신호로 검증하려 들면 값을 못박게
+    되고 그건 모델을 올릴 때마다 의미 없이 깨진다(아래 플러밍 테스트 주석과 같은 이유).
+    """
+
+    def __init__(self) -> None:
+        self.windows: list[np.ndarray] = []
+
+    def run(self, _outputs, feeds):
+        self.windows.append(feeds["input"].copy())
+        return [np.array([[0.0]], dtype=np.float32), np.zeros((2, 1, 128), dtype=np.float32)]
+
+
+def test_프레임_앞에_직전_64샘플을_붙여_넣는다(monkeypatch):
+    """v5 는 16kHz 에서 576 샘플(64 컨텍스트 + 512)을 받는다.
+
+    512 만 넣으면 **모든 프레임이 무음으로 나온다.** 입력 shape 가 [None, None] 이라
+    예외는 안 나므로, 이 회귀는 오직 여기서만 잡힌다. 실제로 그 상태로 배포돼 있었고,
+    전 프레임 무음 → 창 전체가 무음 런 하나 → VAD_SILENCE 로 목표 지점 절단이 되어
+    "VAD 를 안 쓴 것과 같은데 성공으로 기록되는" 실패였다.
+    """
+    session = _입력을_기록하는_세션()
+    monkeypatch.setattr(silero, "_load", lambda _path: session)
+
+    # 프레임 세 개. 값이 서로 달라야 꼬리가 제대로 넘어갔는지 볼 수 있다.
+    samples = np.arange(FRAME_SAMPLES * 3, dtype=np.int16) * 3
+    speech_probs(samples.tobytes(), "쓰이지 않는 경로")
+
+    assert len(session.windows) == 3
+    assert all(w.shape == (1, FRAME_SAMPLES + _CONTEXT_SAMPLES) for w in session.windows)
+
+    audio = samples.astype(np.float32) / 32768.0
+
+    # 첫 프레임 앞에는 우리가 받은 오디오가 없다 — 0 으로 시작한다.
+    assert np.array_equal(
+        session.windows[0][0, :_CONTEXT_SAMPLES], np.zeros(_CONTEXT_SAMPLES, dtype=np.float32)
+    )
+
+    # 두 번째부터는 **직전 프레임의 꼬리**가 앞에 온다. 여기가 어긋나면 경계마다
+    # 컨텍스트가 틀려 판정이 조용히 나빠진다.
+    assert np.allclose(
+        session.windows[1][0, :_CONTEXT_SAMPLES],
+        audio[FRAME_SAMPLES - _CONTEXT_SAMPLES : FRAME_SAMPLES],
+    )
+    assert np.allclose(session.windows[1][0, _CONTEXT_SAMPLES:], audio[FRAME_SAMPLES : FRAME_SAMPLES * 2])
+
+
+def test_호출마다_컨텍스트를_새로_시작한다(monkeypatch):
+    """앞 요청의 꼬리를 이어 쓰면 창 하나의 판정이 '직전에 어떤 요청이 왔는지'에 따라
+    달라진다. 같은 wav 를 두 번 보내면 같은 절단점이 나와야 한다."""
+    session = _입력을_기록하는_세션()
+    monkeypatch.setattr(silero, "_load", lambda _path: session)
+
+    pcm = (np.arange(FRAME_SAMPLES * 2, dtype=np.int16) * 3).tobytes()
+    speech_probs(pcm, "쓰이지 않는 경로")
+    speech_probs(pcm, "쓰이지 않는 경로")
+
+    assert np.array_equal(session.windows[0], session.windows[2])
+    assert np.array_equal(session.windows[1], session.windows[3])
 
 
 @needs_model
