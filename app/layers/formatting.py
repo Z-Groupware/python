@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from app.schemas.common import UNKNOWN_PERSON, FewShotExample, Participant, Utterance
 
@@ -88,11 +88,36 @@ def format_participants(participants: list[Participant]) -> str:
     return "\n".join(lines) or NONE_MARK
 
 
+WEEKDAYS = "월화수목금토일"
+
+
 def format_meeting_date(meeting_date: date | None) -> str:
+    """기준일 + 이번 주·다음 주 달력.
+
+    <h2>요일 산수를 모델에게 시키지 않는다</h2>
+    ISO 날짜만 주면 모델이 ① 그 날의 요일을 알아내고 ② "다음 주 화요일"이 며칠인지 세야 한다.
+    둘 다 자주 틀린다 — 실측에서 2026-08-14(목) 기준 "다음 주 화요일까지"를 **2026-08-28(금)**
+    으로 냈다. 열흘이 밀렸고 요일도 안 맞았다.
+
+    달력을 코드가 만들어 넘기면 그 계산이 **찾아보기**가 된다. 날짜 산수는 파이썬이 틀릴 수
+    없는 일이고, 모델이 틀릴 수 있는 일이다 — 그러면 파이썬이 한다(같은 판단: L2 가 구간을
+    코드로 계산하는 것, l2.py).
+
+    ⚠ 프롬프트 파일은 그대로지만 **모델이 보는 값이 바뀐다.** 기한 정확도를 이 변경 전후로
+    비교할 때 prompt_version 만 보면 같은 버전으로 보이므로, 지표를 되짚을 때 이 함수의
+    변경 이력을 함께 봐야 한다.
+    """
     if meeting_date is None:
         # 프롬프트의 "기준일이 없으면 상대 표현을 계산하지 말라"와 짝이다.
         return "(제공되지 않음 — 상대적 기한 표현은 계산하지 말고 dueDate 를 null 로 둔다)"
-    return meeting_date.isoformat()
+
+    monday = meeting_date - timedelta(days=meeting_date.weekday())
+    lines = [f"{meeting_date.isoformat()} ({WEEKDAYS[meeting_date.weekday()]})", ""]
+    for offset, label in ((0, "이번 주"), (7, "다음 주")):
+        days = [monday + timedelta(days=offset + i) for i in range(7)]
+        formatted = " · ".join(f"{WEEKDAYS[d.weekday()]} {d.isoformat()}" for d in days)
+        lines.append(f"{label}: {formatted}")
+    return "\n".join(lines)
 
 
 EVIDENCE_MARK = "   ← 근거 지정 가능"
