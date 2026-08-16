@@ -11,8 +11,8 @@ from app.errors import LayerError, LayerErrorKind
 from app.layers.l5 import (
     NOT_REPRODUCED,
     _evidence_window,
-    _verify_variables,
     _match,
+    _verify_variables,
     blocking,
     build_response_schema,
     compare,
