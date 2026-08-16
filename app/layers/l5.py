@@ -216,12 +216,32 @@ def _match(candidates: list[AssignmentTuple], baseline: AssignmentTuple) -> Assi
 
 
 def _verify_variables(request: VerifyRequest) -> dict[str, str]:
+    """VERIFY 도 좁은 시야로 본다 — 예전에는 여기만 전체 발화를 실었다.
+
+    프롬프트(l5_verify.v1.txt)가 이렇게 못박고 있다 —
+
+        그 발화(와 바로 앞뒤 문맥)만으로 판단한다.
+        회의 전체를 뒤져 근거를 새로 찾아주지 않는다 — 그렇게 하면 검증이 아니라
+        두 번째 추출이 된다.
+
+    전체를 넘기면 그 규칙이 부탁이 된다. `_evidence_window` 주석이 이미 답을 적어 두었다 —
+    **관점을 좁히는 유일하게 확실한 방법은 넘기지 않는 것**이다. NARROW 는 그렇게 하고
+    있었고 VERIFY 만 아니었다.
+
+    ⚠ 두 관점이 같은 발화를 보게 되는 것 아닌가 — 아니다. 좁히는 것은 **문맥의 폭**이고,
+    두 관점을 가르는 것은 프롬프트다(NARROW 는 재추출, VERIFY 는 검사). 같은 재료로 다른
+    질문을 하는 것이 이 계층의 설계이고, 서로 다른 재료를 보게 하는 것이 아니다.
+
+    덤으로 입력 토큰이 줄어든다. L5 는 실측에서 **회의 입력 토큰의 26%** 였고 그 대부분이
+    같은 발화를 관점마다 통째로 다시 싣는 데서 나왔다. 쿼터가 병목일 때 이 차이가 곧
+    "같은 한도로 회의를 몇 건 더 돌리는가"가 된다.
+    """
     return {
         "TOPIC": request.topic,
         "MEETING_DATE": fmt.format_meeting_date(request.meeting_date),
         "PARTICIPANTS": fmt.format_participants(request.participants),
         "TARGET_TUPLE": _format_target(request.tuple, request.participants),
-        "UTTERANCES": fmt.format_utterances(request.utterances),
+        "UTTERANCES": fmt.format_utterances(_evidence_window(request)),
     }
 
 
