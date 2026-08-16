@@ -40,6 +40,20 @@ class GeminiClient:
         self._settings = settings
         self._client = None  # 최초 호출 때 만든다 (DRY_RUN 이면 아예 안 만든다)
 
+        # 동시에 제공자에게 나가는 호출 수 상한.
+        #
+        # ⚠ **이 객체가 프로세스에 하나여야 상한이 성립한다.** 요청마다 새로 만들면 각자
+        #   자기 몫의 상한을 갖게 되어 아무것도 제한하지 않는다(routers/internal.py 의
+        #   _gemini_client 가 하나로 유지한다).
+        #
+        # 왜 필요한가 — Spring 이 주제 단위 계층(L3·L3.5·L4)을 주제별로 동시에 부른다
+        # (BACKEND 주제 병렬화). 회의 하나에 주제가 7개면 그만큼이 한꺼번에 나가고, 분석이
+        # 두 건 겹치면 그 두 배다. 제공자 레이트리밋을 **우리가 스스로 당기는** 모양이 된다.
+        #
+        # 상한을 여기 두는 이유는 Spring 쪽 풀 크기로는 못 막기 때문이다 — 인스턴스가 늘거나
+        # 다른 호출자가 붙으면 그 가정이 깨진다. 제공자로 나가는 문이 여기 하나뿐이다.
+        self._limiter = asyncio.Semaphore(settings.gemini_max_concurrency)
+
     def _ensure_client(self):
         if self._client is None:
             if not self._settings.gemini_api_key:
@@ -72,11 +86,14 @@ class GeminiClient:
 
         for attempt in range(attempts):
             try:
-                response = await client.aio.models.generate_content(
-                    model=self._settings.gemini_model,
-                    contents=prompt,
-                    config=config,
-                )
+                # ⚠ 상한은 **호출 하나만** 감싼다. 아래 백오프 sleep 까지 잡고 있으면 기다리는
+                #   동안 남의 자리를 막는다 — 그때 제공자는 놀고 우리만 줄을 선다.
+                async with self._limiter:
+                    response = await client.aio.models.generate_content(
+                        model=self._settings.gemini_model,
+                        contents=prompt,
+                        config=config,
+                    )
                 return self._parse(response)
             except LayerError:
                 raise

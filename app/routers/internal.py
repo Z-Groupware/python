@@ -7,6 +7,8 @@ AI-01 이 붙으면서 미구현 스텁이 사라졌다. 다시 생기면 501 �
 미구현이 품질 문제로 위장된다.
 """
 
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends
 
 from app.clients.embedding import TASK_DOCUMENT, EmbeddingClient
@@ -54,8 +56,22 @@ IMPLEMENTED = [
 ]
 
 
+@lru_cache(maxsize=1)
+def _gemini_client() -> GeminiClient:
+    """제공자 클라이언트를 **프로세스에 하나로** 유지한다.
+
+    ⚠ 요청마다 만들면 두 가지가 깨진다 —
+
+        동시 호출 상한   인스턴스마다 자기 몫의 세마포어를 갖게 되어 아무것도 제한하지 않는다
+        연결 재사용      genai.Client 가 매 요청 새로 만들어져 커넥션 풀이 그때마다 버려진다
+
+    설정은 get_settings 가 이미 캐시하므로(lru_cache) 여기서 다시 받아도 같은 객체다.
+    """
+    return GeminiClient(get_settings())
+
+
 def get_runner(settings: Settings = Depends(get_settings)) -> LayerRunner:
-    return LayerRunner(GeminiClient(settings), settings)
+    return LayerRunner(_gemini_client(), settings)
 
 
 # ── 계층 (파이프라인 순서대로) ────────────────────────────────────────────────
