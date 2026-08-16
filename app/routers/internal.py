@@ -187,6 +187,7 @@ async def vector_upsert(
 # 계층은 이 엔드포인트를 거치지 않고 few_shot.lookup 을 직접 부른다(같은 프로세스 안이라
 # 왕복시킬 이유가 없다). 이 엔드포인트는 **같은 조회를 밖에서 확인할 수 있게** 열어 둔다 —
 # few-shot 이 이상할 때 계층 전체를 돌리지 않고 검색만 떼어 볼 수 있어야 한다.
+# ⚠ Spring 소비처 없음(의도) — 2026-08-16 전수 대조로 확인했다. 고아로 보인다고 지우지 마라.
 @router.post("/similar", response_model=SimilarResponse)
 async def similar(
     request: SimilarRequest,
