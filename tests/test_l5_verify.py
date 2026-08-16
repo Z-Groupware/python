@@ -11,6 +11,7 @@ from app.errors import LayerError, LayerErrorKind
 from app.layers.l5 import (
     NOT_REPRODUCED,
     _evidence_window,
+    _verify_variables,
     _match,
     blocking,
     build_response_schema,
@@ -171,6 +172,32 @@ class TestEvidenceWindow:
         )
 
         assert len(_evidence_window(broken)) == len(UTTERANCES)
+
+    def test_VERIFY_도_같은_창만_본다(self):
+        """프롬프트가 "회의 전체를 뒤지지 말라"고 못박는데 코드가 전체를 실으면 그건 부탁이 된다.
+
+        예전에는 NARROW 만 창을 좁히고 VERIFY 는 request.utterances 전체를 실었다. 그래서
+        검증 관점이 근거 밖에서 새 근거를 찾아 "검증이 아니라 두 번째 추출"이 될 수 있었고,
+        같은 발화가 관점마다 통째로 다시 실려 입력 토큰의 26% 를 차지했다.
+        """
+        variables = _verify_variables(request())
+
+        # 창 안(302~308)만 있고 밖(300·301·309)은 없다.
+        assert "발화 2" in variables["UTTERANCES"]
+        assert "발화 8" in variables["UTTERANCES"]
+        assert "발화 0" not in variables["UTTERANCES"]
+        assert "발화 9" not in variables["UTTERANCES"]
+
+    def test_근거를_못_찾으면_VERIFY_도_전부_본다(self):
+        # 좁힐 기준이 없으면 좁히지 않는다 — 창을 잘못 잡아 근거를 빼는 것보다 낫다.
+        broken = request().model_copy(
+            update={"tuple": BASELINE.model_copy(update={"evidence_utterance_id": 9999})}
+        )
+
+        variables = _verify_variables(broken)
+
+        assert "발화 0" in variables["UTTERANCES"]
+        assert "발화 9" in variables["UTTERANCES"]
 
 
 class TestMatch:
