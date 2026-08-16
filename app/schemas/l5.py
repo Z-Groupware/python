@@ -98,8 +98,23 @@ class VerifyResponse(CamelModel):
     agree: bool
 
     # 두 관점이 갈린 필드 **전부**. 검토 여부를 정하는 것은 이 중 BLOCKING_FIELDS 뿐이다.
+    #
     disagreement_fields: list[str] = Field(default_factory=list)
 
+    # 첫 회차가 갈렸는데 **재실행 두 번이 모두 동의**했는가 — 즉 그 갈림이 잡음이었을 가능성.
+    #
+    # ⚠ **이 값이 true 여도 agree 는 바뀌지 않는다.** 판정은 첫 회차 그대로이고 여기서는 세기만
+    #   한다. 모델이 같은 입력에 같은 출력을 주지 않는다는 것은 알지만(2026-08-15 실측),
+    #   그건 L3.5 에서 잰 값이고 **L5 에서 잰 적이 없다.** 미검증 전제로 판정을 뒤집으면
+    #   진짜 오배정이 자동확정으로 나갈 수 있고, 이 계층이 막으려던 것이 정확히 그것이다.
+    #
+    # 이 값을 세면 곧 **L5 의 잡음 비율**이다("첫 회차 갈림 중 몇 %가 재실행에서 뒤집혔나").
+    # 그 수치가 다음 결정의 근거가 된다 —
+    #   높으면  다수결로 회수할 값이 있다 → 판정까지 뒤집는다
+    #   낮으면  갈림이 대개 진짜다 → 다수결은 물론 이 재실행 자체를 걷어낸다
+    tie_broken: bool = False
+
+    # 돌린 관점 전부. 재실행이 있었으면 회차마다 둘씩 쌓여 여섯 개다.
     results: list[ViewResult] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
     model: str
