@@ -12,6 +12,7 @@ from app.layers.l5 import (
     NOT_REPRODUCED,
     _evidence_window,
     _match,
+    _verify_variables,
     blocking,
     build_response_schema,
     compare,
@@ -172,6 +173,32 @@ class TestEvidenceWindow:
 
         assert len(_evidence_window(broken)) == len(UTTERANCES)
 
+    def test_VERIFY_도_같은_창만_본다(self):
+        """프롬프트가 "회의 전체를 뒤지지 말라"고 못박는데 코드가 전체를 실으면 그건 부탁이 된다.
+
+        예전에는 NARROW 만 창을 좁히고 VERIFY 는 request.utterances 전체를 실었다. 그래서
+        검증 관점이 근거 밖에서 새 근거를 찾아 "검증이 아니라 두 번째 추출"이 될 수 있었고,
+        같은 발화가 관점마다 통째로 다시 실려 입력 토큰의 26% 를 차지했다.
+        """
+        variables = _verify_variables(request())
+
+        # 창 안(302~308)만 있고 밖(300·301·309)은 없다.
+        assert "발화 2" in variables["UTTERANCES"]
+        assert "발화 8" in variables["UTTERANCES"]
+        assert "발화 0" not in variables["UTTERANCES"]
+        assert "발화 9" not in variables["UTTERANCES"]
+
+    def test_근거를_못_찾으면_VERIFY_도_전부_본다(self):
+        # 좁힐 기준이 없으면 좁히지 않는다 — 창을 잘못 잡아 근거를 빼는 것보다 낫다.
+        broken = request().model_copy(
+            update={"tuple": BASELINE.model_copy(update={"evidence_utterance_id": 9999})}
+        )
+
+        variables = _verify_variables(broken)
+
+        assert "발화 0" in variables["UTTERANCES"]
+        assert "발화 9" in variables["UTTERANCES"]
+
 
 class TestMatch:
     def test_근거_발화로_짝을_맞춘다(self):
@@ -226,6 +253,74 @@ class TestVerify:
 
         assert response.agree is False
         assert response.disagreement_fields == ["assigneeCandidatePersonId"]
+
+    async def test_재실행이_모두_동의해도_판정은_그대로다(self, monkeypatch, patch_narrow):
+        """2026-08-15 — 갈렸을 때 두 번 더 묻지만 **세기만 한다.**
+
+        모델이 같은 입력에 같은 출력을 주지 않는 것은 안다(L3.5 에서 쟀다). 하지만 L5 에서
+        재본 적이 없고, 미검증 전제로 판정을 뒤집으면 진짜 오배정이 자동확정으로 나간다 —
+        이 계층이 막으려던 것이 그것이다. 그래서 tie_broken 만 켜고 agree 는 건드리지 않는다.
+        """
+        # 1회차는 담당자가 갈리고, 2·3회차는 동의한다.
+        narrow_results = [
+            BASELINE.model_copy(update={"assignee_candidate_person_id": 42}),
+            BASELINE.model_copy(),
+            BASELINE.model_copy(),
+        ]
+        calls = {"n": 0}
+
+        async def fake(request_, runner):
+            index = min(calls["n"], len(narrow_results) - 1)
+            calls["n"] += 1
+            return ExtractTuplesResponse(
+                tuples=[narrow_results[index]],
+                usage=Usage(tokens_in=100, tokens_out=20),
+                model="fake-model",
+                prompt_version="v1",
+            )
+
+        monkeypatch.setattr("app.layers.l5.l4.extract_tuples", fake)
+
+        response = await verify(request(), FakeRunner())
+
+        # 판정은 첫 회차 그대로다 — 여기가 이 테스트의 요점이다.
+        assert response.agree is False
+        assert response.disagreement_fields == ["assigneeCandidatePersonId"]
+        # 다만 "잡음이었을 수 있다"는 사실은 남는다. 이 값을 세면 L5 의 잡음 비율이 된다.
+        assert response.tie_broken is True
+        # 재실행 비용을 숨기지 않는다 — 회차마다 관점 둘이라 셋이면 여섯이다.
+        assert len(response.results) == 6
+
+    async def test_재실행도_갈리면_잡음이_아니다(self, patch_narrow):
+        # 세 회차 모두 같은 불일치 — 이건 흔들림이 아니라 진짜다.
+        patch_narrow(tuples=[BASELINE.model_copy(update={"assignee_candidate_person_id": 42})])
+
+        response = await verify(request(), FakeRunner())
+
+        assert response.agree is False
+        assert response.tie_broken is False
+
+    async def test_첫_회차가_동의하면_다시_묻지_않는다(self, monkeypatch):
+        """행복 경로에 비용을 물리지 않는다 — 쿼터가 병목일 때 이 차이가 크다."""
+        calls = {"n": 0}
+
+        async def fake(request_, runner):
+            calls["n"] += 1
+            return ExtractTuplesResponse(
+                tuples=[BASELINE.model_copy()],
+                usage=Usage(tokens_in=100, tokens_out=20),
+                model="fake-model",
+                prompt_version="v1",
+            )
+
+        monkeypatch.setattr("app.layers.l5.l4.extract_tuples", fake)
+
+        response = await verify(request(), FakeRunner())
+
+        assert response.agree is True
+        assert response.tie_broken is False
+        assert calls["n"] == 1
+        assert len(response.results) == 2
 
     async def test_VERIFY가_REJECT면_일치해도_검토로_보낸다(self, patch_narrow):
         patch_narrow(tuples=[BASELINE.model_copy()])

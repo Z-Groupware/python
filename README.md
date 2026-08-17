@@ -25,7 +25,7 @@ Spring(BACKEND 리포)이 이 서버를 부르는 **단방향**이다.
 
 전부 `X-Internal-Token` 헤더 필수. 미구현 계층은 **501** 로 거절한다(200 + 빈 결과로 두면
 Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이 품질 문제로 위장된다).
-지금은 열 개가 다 붙어 있어 501 을 내는 경로가 없다.
+지금은 열한 개가 다 붙어 있어 501 을 내는 경로가 없다.
 
 | ID | 경로 | 상태 |
 |---|---|---|
@@ -39,6 +39,7 @@ Spring 이 "계층 정상 완료, 산출물 없음"으로 기록해 미구현이
 | **AI-08** | `POST /internal/vector/upsert` | **구현됨** |
 | **AI-09** | `POST /internal/similar` | **구현됨** |
 | **AI-10** | `GET /internal/health` | **구현됨** |
+| **AI-11** | `POST /internal/layers/overview/summarize-meeting` | **구현됨** |
 
 AI-10 이 돌려주는 `implemented` 목록과 실제 라우팅이 어긋나지 않는지 테스트가 검증한다
 (`test_internal_auth.py`). 계층을 붙이고 목록을 잊으면 워커가 미구현 계층을 부른다.
