@@ -132,10 +132,18 @@ async def summarize_meeting(
     return await overview.summarize_meeting(request, runner)
 
 
-# ── AI-10 · 헬스체크 — 워커 백오프 판단용 ──────────────────────────────────────
-# 인프라 liveness(/health, 무인증)와 구분한다. 이쪽은 "계층을 받을 준비가 됐는지"이므로
-# 토큰을 요구하고 모델 설정 여부까지 본다 — 키가 없는 채로 살아 있으면 워커가
-# 계속 태우다 전부 실패한다.
+# ── AI-10 · 헬스체크 — 운영 점검·구현 목록 노출용 ─────────────────────────────
+# 인프라 liveness(/health, 무인증)와 구분한다. 이쪽은 "계층을 받을 준비가 됐는지"라
+# 토큰을 요구하고 모델 설정 여부까지 본다 — status: UP 만으로는 **떠 있지만 일은 못 하는**
+# 서버(키 없음·dryRun·계층 덜 배포됨)를 구분할 수 없다.
+#
+# ⚠ Spring 소비처 없음(의도) — 2026-08-16 전수 대조로 확인했다. 예전 주석은 '워커 백오프
+# 판단용'이라 적었으나 그렇게 부르는 코드는 없었다. 지금 이 응답은 사람이 배포를 확인할 때
+# 읽는다. 소비처를 지어내지 않으려고 그 문구를 걷어낸다.
+#
+# 응답 필드는 줄이지 않는다 — 언젠가 기계가 읽는다면 geminiConfigured·dryRun·implemented 가
+# 판단의 핵심이 된다. 다만 그 자리는 매 주기 백오프가 아니라 **기동·배포 게이트**가 맞다고
+# 본다(주기마다 왕복이 붙고, 체크와 호출 사이 틈에서 조용히 일을 건너뛰는 실패가 생긴다).
 @router.get("/health")
 async def internal_health(settings: Settings = Depends(get_settings)) -> dict:
     return {
@@ -187,6 +195,7 @@ async def vector_upsert(
 # 계층은 이 엔드포인트를 거치지 않고 few_shot.lookup 을 직접 부른다(같은 프로세스 안이라
 # 왕복시킬 이유가 없다). 이 엔드포인트는 **같은 조회를 밖에서 확인할 수 있게** 열어 둔다 —
 # few-shot 이 이상할 때 계층 전체를 돌리지 않고 검색만 떼어 볼 수 있어야 한다.
+# ⚠ Spring 소비처 없음(의도) — 2026-08-16 전수 대조로 확인했다. 고아로 보인다고 지우지 마라.
 @router.post("/similar", response_model=SimilarResponse)
 async def similar(
     request: SimilarRequest,
